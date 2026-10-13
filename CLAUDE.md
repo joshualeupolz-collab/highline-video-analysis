@@ -80,3 +80,33 @@ The app stores "one video + a list of cut points" and has a cutting module witho
 (`apps/web/src/video/trim.ts`, own MP4/WebM code). The analysis should become a pure module
 (`analyze(videoFile) → { cutPoints, signals }`) that the app calls after recording, on the
 "Cut and upload" screen. Keep it free of UI and of the app's data model.
+
+---
+
+## Status in this repository (2026-10-13)
+
+- Test videos are in `videos/` (`video-01.mp4` … `video-08.mp4`, see `videos/README.md`).
+  Hand-marked BDCs go next to them as `video-XX.bdc.json`.
+- **Test page** (`index.html`, `src/testpage/`): open videos, run the analysis, see signals and
+  suggested cut points on a timeline, mark true BDCs by hand (keys M / C / Del / ← →), save them as
+  JSON, and see found / missed / extra points against the hand marks. `npm run build` also writes a
+  single self-contained `dist/bdc-test-bench.html`.
+- **Approach A implemented** (`src/analysis/`, pure TS, no dependencies):
+  - `motion.ts`: per frame (160 px gray, ~15 fps) global shift by phase correlation
+    (`phaseCorrelation.ts`, `fft.ts`), residual motion after compensating it, centroid of the residual
+    motion, hard-cut detection.
+  - `detect.ts`: per shot, athlete height ≈ foreground centroid y − accumulated camera tilt,
+    smoothed and detrended; bounce period by autocorrelation; BDCs = prominent maxima (athlete lowest).
+  - `analyze.ts` / `videoFrames.ts`: browser entry `analyze(file) → { cutPoints, period, signals }`
+    (plays the video muted at 2–8× and grabs frames with `requestVideoFrameCallback`).
+  - `scripts/analyze-node.ts`, `scripts/evaluate.ts`: same core in Node via the system ffmpeg.
+- **Finding:** in the test videos the camera follows the athlete, so the accumulated vertical camera
+  shift is the strongest signal (it is the athlete's height and tells top from bottom). Pure
+  foreground motion energy, as first suggested, is low at both top and bottom and was not
+  discriminative; it is kept as a chart signal only.
+- **Known weak spots:** tight telephoto shots where the athlete fills the frame (video-01; phase
+  correlation then partly tracks the athlete), fixed camera with a small athlete (video-04), standing
+  pauses without bounces. Browser sampling timestamps vary a little between runs, so results can
+  differ by a point or two.
+- **Next:** hand-mark the test videos, run `npm run evaluate`, tune; then approach B (pose) for the
+  hard cases and the "predict t0 + n·T and refine" step.

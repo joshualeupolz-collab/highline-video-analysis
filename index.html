@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BDC Test Bench</title>
+    <link rel="stylesheet" href="/src/testpage/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>BDC test bench</h1>
+      <label class="button primary">
+        Open videos / JSON…
+        <input id="files" type="file" accept="video/*,.json,application/json" multiple hidden />
+      </label>
+      <select id="videoList" aria-label="Loaded videos"></select>
+    </header>
+
+    <p id="empty" class="hint">
+      Open one or more videos (and, if you have them, their <code>.bdc.json</code> files). Everything stays on
+      this device; nothing is uploaded.
+    </p>
+
+    <main id="main" hidden>
+      <div class="player">
+        <video id="video" controls playsinline muted></video>
+      </div>
+
+      <div class="row controls">
+        <button data-act="back-big" title="Shift+←">−0.5 s</button>
+        <button data-act="back" title="←">−1 frame</button>
+        <button data-act="play" title="Space">Play/Pause</button>
+        <button data-act="fwd" title="→">+1 frame</button>
+        <button data-act="fwd-big" title="Shift+→">+0.5 s</button>
+        <select id="rate" aria-label="Playback speed">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+        </select>
+        <span id="time" class="mono">0.00 s</span>
+      </div>
+
+      <div class="row controls">
+        <button data-act="mark" class="good" title="M">Mark BDC here (M)</button>
+        <button data-act="cut" title="C">Mark video cut (C)</button>
+        <button data-act="delete" title="Delete / Backspace">Delete nearest mark (Del)</button>
+        <button data-act="prev" title="P">◀ Prev mark (P)</button>
+        <button data-act="next" title="N">Next mark ▶ (N)</button>
+      </div>
+
+      <canvas id="overview" class="timeline" height="150"></canvas>
+      <canvas id="detail" class="timeline" height="110"></canvas>
+      <p class="legend">
+        <span class="sw manual"></span> your BDC marks (drag to move)
+        <span class="sw auto"></span> automatic BDCs
+        <span class="sw cut"></span> video cuts
+        <span class="sw height"></span> athlete height (down = lower)
+        <span class="sw motion"></span> foreground motion
+      </p>
+
+      <div class="row controls">
+        <button data-act="analyze" class="primary">Run automatic analysis</button>
+        <label>speed
+          <select id="analysisRate">
+            <option value="2">2× (slow phones)</option>
+            <option value="4" selected>4×</option>
+            <option value="8">8×</option>
+          </select>
+        </label>
+        <label class="check"><input id="blind" type="checkbox" /> Hide automatic points (mark blind)</label>
+        <span id="status" class="mono"></span>
+      </div>
+
+      <div class="row controls">
+        <button data-act="save">Save my marks (.bdc.json)</button>
+        <button data-act="save-auto">Save analysis (.auto.json)</button>
+        <button data-act="adopt">Copy automatic points to my marks</button>
+        <button data-act="clear" class="danger">Clear my marks</button>
+      </div>
+
+      <section id="stats"></section>
+    </main>
+
+    <details class="help">
+      <summary>How to use</summary>
+      <ul>
+        <li>Step through the video and press <b>M</b> (or the green button) at every bottom dead center (lowest point
+          of a bounce). <b>C</b> marks a cut in the video (a change of shot).</li>
+        <li>Click or drag on the timelines to jump. Drag a green mark to move it, <b>Del</b> removes the mark nearest to
+          the play position.</li>
+        <li>Your marks are kept in this browser automatically. Use <b>Save my marks</b> to get a
+          <code>video-XX.bdc.json</code> file and put it next to the video in the repository's <code>videos/</code>
+          folder.</li>
+        <li>Tick <b>Hide automatic points</b> if you want to mark without seeing the computer's answer first.</li>
+      </ul>
+    </details>
+
+    <script type="module" src="/src/testpage/main.ts"></script>
+  </body>
+</html>

@@ -45,11 +45,11 @@ const names = readdirSync(videoDir).filter((f) => /\.(webm|mp4)$/.test(f) && (!o
 for (const name of names) {
   const started = Date.now();
   const result = await page.evaluate(
-    async ([url, model]) => {
+    async ([url, model, rate]) => {
       const blob = await (await fetch(url)).blob();
-      return await window.bdcBench.analyze(blob, { pose: model === "none" ? false : { model, delegate: "CPU" } });
+      return await window.bdcBench.analyze(blob, { frames: rate ? { playbackRate: rate } : undefined, pose: model === "none" ? false : { model, delegate: "CPU" } });
     },
-    [`/videos/${name}`, model],
+    [`/videos/${name}`, model, Number(process.env.RATE ?? 0)],
   );
   const out = join(outDir, name.replace(/\.[^.]+$/, ".auto.json"));
   writeFileSync(out, JSON.stringify(result));

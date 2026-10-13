@@ -7,13 +7,17 @@ import type { PoseFeatures, PoseSignals, PoseTrack } from "./types";
 export interface RefineOptions {
   /**
    * How the pose may move the motion-based time:
-   * - "off": keep it (only annotate the knee angle). Default: on the hand-marked videos the motion
-   *   time is already within ~0.1 s of the hand marks, and neither pose method beat it.
+   * - "blend" (default): the mean of the motion time and the "knee" time, where the knees can be
+   *   seen to straighten; else the motion time. Two independent estimates average out some noise:
+   *   slightly better than either alone on the hand-marked videos (e.g. video-05 0.077 → 0.057 s).
+   * - "off": keep the motion time (only annotate the knee angle).
    * - "knee": the moment the knees straighten (knee angle rises through `kneeStraight` after being
    *   below `kneeBent`), which is when the owner marks the BDC in video-01.
    * - "feet": centre of the plateau where the feet (camera-corrected) are lowest.
    */
-  mode: "off" | "knee" | "feet";
+  mode: "blend" | "off" | "knee" | "feet";
+  /** Weight of the knee time in mode "blend" (0..1). */
+  blendWeight: number;
   /** Knee angle (degrees) counted as straight / clearly bent for mode "knee". */
   kneeStraight: number;
   kneeBent: number;
@@ -28,7 +32,8 @@ export interface RefineOptions {
 }
 
 export const defaultRefineOptions: RefineOptions = {
-  mode: "off",
+  mode: "blend",
+  blendWeight: 0.5,
   kneeStraight: 165,
   kneeBent: 150,
   window: 0.6,
@@ -85,9 +90,11 @@ export function refineWithPose(
     };
     const keep: RefinedCutPoint = { ...cp, motionTime: cp.time, method: "motion", knee: kneeAt(cp.time) };
     if (o.mode === "off") return keep;
-    if (o.mode === "knee") {
-      const t = kneeStraightening(features, cp.time, o);
-      return t === null ? keep : { ...cp, time: t, motionTime: cp.time, method: "pose", knee: kneeAt(t) };
+    if (o.mode === "knee" || o.mode === "blend") {
+      const k = kneeStraightening(features, cp.time, o);
+      if (k === null) return keep;
+      const t = o.mode === "knee" ? k : cp.time + o.blendWeight * (k - cp.time);
+      return { ...cp, time: t, motionTime: cp.time, method: "pose", knee: kneeAt(t) };
     }
     if (samples.length < o.minSamples || !Number.isFinite(scale)) return keep;
     const ys = medianFilter(samples.map((s) => s.w.y), 3);

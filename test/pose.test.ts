@@ -100,8 +100,16 @@ describe("refineWithPose", () => {
   // Knees bent until 2.0 s, straight afterwards
   const frames = Array.from({ length: 40 }, (_, i) => figure(i * 0.1, { knee: i * 0.1 < 2.0 ? 120 : 178 }));
 
-  it("keeps the motion time by default and reports the knee angle", () => {
-    const [c] = refineWithPose([{ time: 2.2, confidence: 1 }], track(frames), path);
+  it("blends motion and knee time by default", () => {
+    const [c] = refineWithPose([{ time: 2.3, confidence: 1 }], track(frames), path);
+    expect(c.method).toBe("pose");
+    expect(c.motionTime).toBe(2.3);
+    expect(c.time).toBeGreaterThan(2.1);
+    expect(c.time).toBeLessThan(2.2);
+  });
+
+  it("keeps the motion time in off mode and reports the knee angle", () => {
+    const [c] = refineWithPose([{ time: 2.2, confidence: 1 }], track(frames), path, { mode: "off" });
     expect(c.time).toBe(2.2);
     expect(c.method).toBe("motion");
     expect(c.knee).toBeGreaterThan(170);

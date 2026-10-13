@@ -149,9 +149,25 @@ The app stores "one video + a list of cut points" and has a cutting module witho
     (mean abs error 0.11 / 0.13 / 0.10 s on videos 01 / 04 / 05) – about the precision of the hand
     marks themselves. Moving the BDC to the lowest-feet plateau made it worse (0.21 s on video-01);
     moving it to the moment the knees straighten (the owner marks exactly that in video-01) was
-    equal, not better. So `refine.mode` defaults to "off": the pose only annotates the BDC (knee
-    angle). Modes "knee" and "feet" stay for experiments.
-  - Speed (headless desktop Chromium, CPU delegate): ~1.5 s of analysis per second of video with
-    pose. Phones use the GPU delegate; not measured yet.
+    equal, not better. Averaging the motion time with the knee time (`refine.mode` "blend", the
+    default) was slightly better than either on videos 01 and 05 (e.g. 05: 0.077 → 0.057 s), so the
+    pose now nudges the BDC halfway towards the moment the knees straighten, where it sees that.
+  - **Run-to-run noise:** browser frame sampling is irregular, so results vary between runs
+    (motion only, several runs each: video-01 10–15/15, video-04 13–16/17, video-05 always 12/12;
+    2× instead of 4× analysis speed was not clearly better). A second full run of video-01 gave
+    10/15 instead of 15/15 (bottom plateau is flat in that telephoto
+    clip; small signal changes move the peak by up to 0.6 s). Simulated browser sampling (ffmpeg at
+    30 fps with random drops, 6 seeds) gives ~85 % over videos 01/04/05; more smoothing
+    (`smoothSeconds` 0.3) or `plateauFraction` 0.4 gained only ~1 % there and lost on the
+    ffmpeg run, so the defaults stay.
+  - Pose found (share of samples): 01 100 %, 02 90 %, 03 91 %, 04 35 % (tiny athlete), 05 99 %,
+    06 67 %, 07 98 %, 08 100 %.
+  - Speed (headless desktop Chromium, CPU delegate): ~1.3–1.9 s of analysis per second of video with
+    pose (e.g. 36 s video in 50 s, 73 s video in 95 s). Phones use the GPU delegate; not measured yet.
+- **Privacy (decide before the app uses it):** MediaPipe Tasks sends usage statistics (task type,
+  timings; no images) to `https://odml.pa.googleapis.com/v1/log` and has no switch to turn that off.
+- Model files: `.task` from `./mediapipe/`, else the same model as base64 JSON
+  (`./mediapipe/pose_landmarker_<m>.json`, for hosts that do not serve `.task`, e.g. the claude.ai
+  artifact of the test page), else Google's model CDN.
 - **Next:** measure speed on phones; collect trick names per bounce; use pose to drop false BDCs
   (needs more marked videos with tricks at the top); line detection for tiny athletes.

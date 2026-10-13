@@ -37,6 +37,8 @@ export const defaultPoseOptions: PoseOptions = {
   wasmBases: ["./mediapipe", `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VERSION}/wasm`],
   modelUrls: (m) => [
     `./mediapipe/pose_landmarker_${m}.task`,
+    // Same model as base64 in JSON ({ "base64": "..." }) for hosts that do not serve .task files
+    `./mediapipe/pose_landmarker_${m}.json`,
     `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${m}/float16/latest/pose_landmarker_${m}.task`,
   ],
   inputSize: 256,
@@ -69,9 +71,12 @@ export async function createLandmarker(o: PoseOptions): Promise<Landmarker> {
   const wasmBase = await firstReachable(o.wasmBases, (u) => `${u}/vision_wasm_internal.js`);
   const modelUrl = await firstReachable(o.modelUrls(o.model), (u) => u);
   const fileset = await FilesetResolver.forVisionTasks(wasmBase);
+  const model = modelUrl.endsWith(".json")
+    ? { modelAssetBuffer: base64ToBytes(((await (await fetch(modelUrl)).json()) as { base64: string }).base64) }
+    : { modelAssetPath: modelUrl };
   const make = (delegate: "GPU" | "CPU") =>
     PoseLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: modelUrl, delegate },
+      baseOptions: { ...model, delegate },
       runningMode: "IMAGE",
       numPoses: 1,
       minPoseDetectionConfidence: o.minConfidence,
@@ -157,6 +162,13 @@ export async function trackPose(
     landmarker.close();
   }
   return { keypoints: KEYPOINTS, videoWidth: W, videoHeight: H, frames, sampled };
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function round(v: number, digits = 4): number {

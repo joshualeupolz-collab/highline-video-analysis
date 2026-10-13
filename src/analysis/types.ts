@@ -62,7 +62,7 @@ export interface CutPoint {
   confidence: number;
   /** Time found by the motion analysis, before the pose refinement moved it. */
   motionTime?: number;
-  /** "motion" = from camera/foreground motion only, "pose" = moved to the lowest feet by the pose. */
+  /** "motion" = from camera/foreground motion only, "pose" = adjusted with the body pose (see RefineOptions). */
   method?: "pose" | "motion";
   /** Mean knee angle at the cut point (degrees, 180 = straight), NaN if unknown. */
   knee?: number;

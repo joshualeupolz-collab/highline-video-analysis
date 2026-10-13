@@ -1,3 +1,4 @@
 node_modules/
 dist/
 *.auto.json
+public/mediapipe/

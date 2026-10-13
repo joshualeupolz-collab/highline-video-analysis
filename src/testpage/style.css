@@ -10,6 +10,11 @@
   --cut: #dc2626;
   --height: #2563eb;
   --motion: #a3a3a3;
+  --knee: #9333ea;
+  --tilt: #0d9488;
+  --feet: #ca8a04;
+  --left: #0ea5e9;
+  --right: #f43f5e;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -25,6 +30,9 @@
     --cut: #f87171;
     --height: #60a5fa;
     --motion: #737373;
+    --knee: #c084fc;
+    --tilt: #2dd4bf;
+    --feet: #facc15;
   }
 }
 :root[data-theme="dark"] {
@@ -39,6 +47,9 @@
   --cut: #f87171;
   --height: #60a5fa;
   --motion: #737373;
+  --knee: #c084fc;
+  --tilt: #2dd4bf;
+  --feet: #facc15;
 }
 * { box-sizing: border-box; }
 body {
@@ -69,7 +80,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .good { border-color: var(--good); color: var(--good); font-weight: 600; }
 .danger { color: var(--cut); }
 .check { display: inline-flex; gap: 4px; align-items: center; }
-.player { background: #000; border-radius: 8px; overflow: hidden; display: flex; justify-content: center; }
+.player { position: relative; background: #000; border-radius: 8px; overflow: hidden; display: flex; justify-content: center; }
+#overlay { position: absolute; pointer-events: none; }
+#poseInfo { min-height: 1.4em; margin: 4px 0 0; font-size: 0.85rem; }
+.trick input { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--fg); min-width: 14em; }
 video { max-width: 100%; max-height: 55vh; display: block; }
 .timeline {
   width: 100%;
@@ -88,6 +102,9 @@ video { max-width: 100%; max-height: 55vh; display: block; }
 .sw.cut { background: var(--cut); height: 12px; width: 2px; }
 .sw.height { background: var(--height); }
 .sw.motion { background: var(--motion); }
+.sw.knee { background: var(--knee); }
+.sw.tilt { background: var(--tilt); }
+.sw.feet { background: var(--feet); }
 #stats table { border-collapse: collapse; font-size: 0.9rem; }
 #stats td, #stats th { padding: 2px 10px 2px 0; text-align: left; }
 #stats .bad { color: var(--cut); }
@@ -102,3 +119,8 @@ textarea {
   border-radius: 6px;
   padding: 6px;
 }
+.scroll { overflow-x: auto; }
+#stats h3 { font-size: 1rem; margin: 18px 0 4px; }
+#stats table.bounces td, #stats table.bounces th { white-space: nowrap; }
+#stats table.bounces tr[data-seek] { cursor: pointer; }
+#stats table.bounces tr[data-seek]:hover { background: var(--border); }

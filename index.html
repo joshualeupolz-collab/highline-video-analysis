@@ -24,7 +24,9 @@
     <main id="main" hidden>
       <div class="player">
         <video id="video" controls playsinline muted></video>
+        <canvas id="overlay" aria-hidden="true"></canvas>
       </div>
+      <p id="poseInfo" class="hint mono"></p>
 
       <div class="row controls">
         <button data-act="back-big" title="Shift+←">−0.5 s</button>
@@ -57,6 +59,20 @@
         <span class="sw height"></span> athlete height (down = lower)
         <span class="sw motion"></span> foreground motion
       </p>
+      <canvas id="poseChart" class="timeline" height="120" hidden></canvas>
+      <p id="poseLegend" class="legend" hidden>
+        <span class="sw knee"></span> knee angle (top = straight 180°, bottom = 60°)
+        <span class="sw tilt"></span> body tilt (bottom = upright, top = upside down)
+        <span class="sw feet"></span> feet height (down = lower)
+      </p>
+
+      <div class="row controls trick">
+        <label>Trick of this bounce
+          <input id="trick" list="trickNames" placeholder="e.g. backflip, buddha, chest bounce" autocomplete="off" />
+        </label>
+        <datalist id="trickNames"></datalist>
+        <span id="trickRange" class="hint mono"></span>
+      </div>
 
       <div class="row controls">
         <button data-act="analyze" class="primary">Run automatic analysis</button>
@@ -67,6 +83,12 @@
             <option value="8">8×</option>
           </select>
         </label>
+        <label class="check"><input id="usePose" type="checkbox" checked /> Body pose</label>
+        <select id="poseModel" aria-label="Pose model">
+          <option value="lite">pose: fast</option>
+          <option value="full" selected>pose: accurate</option>
+        </select>
+        <label class="check"><input id="skeleton" type="checkbox" checked /> Show skeleton</label>
         <label class="check"><input id="blind" type="checkbox" /> Hide automatic points (mark blind)</label>
         <span id="status" class="mono"></span>
       </div>
@@ -99,6 +121,12 @@
         <li>Your marks are kept in this browser automatically. Use <b>Save my marks</b> to get a
           <code>video-XX.bdc.json</code> file and put it next to the video in the repository's <code>videos/</code>
           folder.</li>
+        <li>With <b>Body pose</b> the analysis also tracks head, shoulders, elbows, wrists, hips, knees and feet
+          (the first run loads about 20 MB). The skeleton is drawn on the video; the chart below the timeline shows
+          the knee angle, body tilt and feet height. Automatic points are then moved to the lowest point of the
+          feet.</li>
+        <li>Type the name of the trick into <b>Trick of this bounce</b> while the video is inside that bounce. The
+          names are saved with your marks.</li>
         <li>Tick <b>Hide automatic points</b> if you want to mark without seeing the computer's answer first.</li>
       </ul>
     </details>

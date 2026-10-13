@@ -75,8 +75,34 @@ export async function sampleFrames(
   options: Partial<FrameSourceOptions> = {},
 ): Promise<number> {
   const o = { ...defaultFrameSourceOptions, ...options };
-  const v = video as VideoWithRvfc;
   const grab = makeGrabber(video, o.width);
+  return playFrames(video, (t) => onFrame(grab(t)), o);
+}
+
+export interface PlayOptions {
+  /** Target sampling rate in video seconds. */
+  fps: number;
+  /** Fixed playback speed. Ignored when `adaptive` is set. */
+  playbackRate?: number;
+  /**
+   * Adjust the playback speed to how long `onFrame` takes, so that slow per-frame work (pose
+   * detection) still gets about `fps` samples per video second.
+   */
+  adaptive?: boolean;
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * Plays the video from the start (muted) and calls `onFrame(time)` with the current frame on screen
+ * in the video element, about `fps` times per video second. Resolves with the duration.
+ */
+export async function playFrames(
+  video: HTMLVideoElement,
+  onFrame: (time: number) => void,
+  o: PlayOptions,
+): Promise<number> {
+  const v = video as VideoWithRvfc;
   const duration = video.duration;
   const step = 1 / o.fps;
 
@@ -85,7 +111,7 @@ export async function sampleFrames(
       if (o.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       video.currentTime = t;
       await once(video, "seeked");
-      onFrame(grab(t));
+      onFrame(t);
       o.onProgress?.(t / duration);
     }
     return duration;
@@ -96,10 +122,13 @@ export async function sampleFrames(
     video.currentTime = 0;
     await once(video, "seeked");
   }
-  video.playbackRate = o.playbackRate;
+  let rate = o.adaptive ? 1 : (o.playbackRate ?? 1);
+  video.playbackRate = rate;
   return new Promise<number>((resolve, reject) => {
     let last = -Infinity;
     let handle = 0;
+    let busy = 0;
+    let calls = 0;
     const finish = () => {
       v.cancelVideoFrameCallback?.(handle);
       video.removeEventListener("ended", finish);
@@ -110,14 +139,28 @@ export async function sampleFrames(
     };
     const onVideoFrame = (_now: number, meta: { mediaTime: number }) => {
       if (o.signal?.aborted) {
+        video.removeEventListener("ended", finish);
         video.pause();
+        video.playbackRate = 1;
         reject(new DOMException("Aborted", "AbortError"));
         return;
       }
       if (meta.mediaTime - last >= step * 0.9) {
         last = meta.mediaTime;
-        onFrame(grab(meta.mediaTime));
+        const started = performance.now();
+        onFrame(meta.mediaTime);
+        busy += performance.now() - started;
+        calls++;
         o.onProgress?.(meta.mediaTime / duration);
+        if (o.adaptive && calls % 5 === 0) {
+          // Leave ~30 % headroom: video seconds per wall second = 1 / (fps * work per sample)
+          const perSample = busy / calls / 1000;
+          const next = Math.max(0.25, Math.min(4, 0.7 / (o.fps * Math.max(perSample, 1e-3))));
+          if (Math.abs(next - rate) / rate > 0.15) {
+            rate = next;
+            video.playbackRate = rate;
+          }
+        }
       }
       handle = v.requestVideoFrameCallback!(onVideoFrame);
     };

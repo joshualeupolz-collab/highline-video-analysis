@@ -66,6 +66,8 @@ export interface PoseTrack {
   sampled: number;
   /** Times (s) of samples without a (plausible) pose. */
   missed?: number[];
+  /** How many samples were taken in dense mode (fast or unclear movement). */
+  dense?: number;
 }
 
 /** Per-sample body measures derived from a pose (degrees and frame-width units). */

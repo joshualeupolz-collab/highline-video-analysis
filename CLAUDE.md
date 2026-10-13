@@ -202,6 +202,21 @@ The app stores "one video + a list of cut points" and has a cutting module witho
     contact with slow changes, a high cost for switching feet ↔ hands and a V-shape prior.
     No more direction jumps; still right only about half the time where it is drawn (video-05's
     wide webbing and brick wall are hard). "Show line" is off by default.
+- **Round 4 (owner feedback: first 3 s of video-08 without pose; tuck flip at 16.2–18 s messy;
+  sample sparsely when calm, densely when fast):**
+  - Missing start: on the GPU delegate the first inference (shader compilation) takes seconds while
+    the video kept playing, so everything until then was skipped (reproduced with the GPU path in
+    headless Chromium: 3 samples in 6 s). Fixes: the model is warmed up before playback, and the
+    pose pass pauses the video while it works (`playFrames({ pauseWhileWorking })`), so no wanted
+    sample is lost however slow the device. Now ~10 samples/s from 0.03 s on the GPU path too.
+  - Adaptive sampling: 10 poses/s in calm phases, every frame (30/s) for 0.4 s after a turn faster
+    than 200°/s, a centre speed above 6 torso lengths/s, or an unclear detection (second crop
+    needed / nothing found). Time for videos 01/05/08 with pose: 105/99/70 s (was 194/151/125 s
+    with two crops at 15/s), no torso flips or joint spikes.
+  - Not tracking yet: search crops of 30/45/70 % of the frame around the motion focus (rotating
+    sizes), then the full frame.
+  - Offline tracker allows 900°/s turning (tuck flips are that fast). The tuck flip in video-08 at
+    16.2–18 s (motion blur, body folded) is still partly wrong – close to what MediaPipe can do.
 - **Privacy (decide before the app uses it):** MediaPipe Tasks sends usage statistics (task type,
   timings; no images) to `https://odml.pa.googleapis.com/v1/log` and has no switch to turn that off.
 - Model files: `.task` from `./mediapipe/`, else the same model as base64 JSON

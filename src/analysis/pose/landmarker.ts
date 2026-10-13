@@ -14,8 +14,17 @@ import { KEYPOINTS, MEDIAPIPE_INDEX, type PoseFrame, type PoseTrack } from "./ty
 export type PoseModel = "lite" | "full" | "heavy";
 
 export interface PoseOptions {
-  /** Pose samples per second of video. */
+  /** Pose samples per second of video in calm phases. */
   fps: number;
+  /**
+   * Samples per second while the body turns fast, moves fast or is hard to recognise: then every
+   * frame (or `denseFps`) is analysed for at least `denseHold` seconds.
+   */
+  denseFps: number;
+  denseHold: number;
+  /** Turn rate (degrees per second) and centre speed (torso lengths per second) that switch to dense sampling. */
+  denseTurn: number;
+  denseSpeed: number;
   model: PoseModel;
   /** Folder with the MediaPipe wasm files. Tried in order; the first that answers is used. */
   wasmBases: string[];
@@ -39,7 +48,11 @@ export interface PoseOptions {
 const VERSION = "1.0.1";
 
 export const defaultPoseOptions: PoseOptions = {
-  fps: 15,
+  fps: 10,
+  denseFps: 30,
+  denseHold: 0.4,
+  denseTurn: 200,
+  denseSpeed: 6,
   model: "full",
   wasmBases: ["./mediapipe", `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VERSION}/wasm`],
   modelUrls: (m) => [
@@ -53,7 +66,7 @@ export const defaultPoseOptions: PoseOptions = {
   minConfidence: 0.3,
   delegate: "GPU",
   line: true,
-  turnRate: 700,
+  turnRate: 1000,
 };
 
 async function firstReachable(urls: string[], probe: (u: string) => string): Promise<string> {
@@ -110,6 +123,16 @@ export async function trackPose(
 ): Promise<PoseTrack> {
   const o = { ...defaultPoseOptions, ...options };
   const landmarker = await createLandmarker(o);
+  // Warm up before playing: the first inference (GPU shader compilation) can take seconds
+  {
+    const warm = document.createElement("canvas");
+    warm.width = o.inputSize;
+    warm.height = o.inputSize;
+    const wctx = warm.getContext("2d")!;
+    if (video.readyState >= 2) wctx.drawImage(video, 0, 0, o.inputSize, o.inputSize);
+    landmarker.detect(warm);
+    landmarker.detect(warm);
+  }
   const W = video.videoWidth;
   const H = video.videoHeight;
   const canvas = document.createElement("canvas");
@@ -195,11 +218,17 @@ export async function trackPose(
   // Online state: the last two picked poses give speed and turn rate for the prediction
   let last: { time: number; points: number[] } | null = null;
   let velocity = { x: 0, y: 0, turn: 0 };
+  let searchTurn = 0;
+  let denseUntil = -1;
+  let currentTime = 0;
+  let dense = 0;
 
   try {
     await playFrames(
       video,
       (time) => {
+        currentTime = time;
+        if (time < denseUntil) dense++;
         while (mi < motions.length - 1 && motions[mi + 1].time <= time) mi++;
         const m = motions[mi];
         const recent = last && time - last.time < 0.6 ? last : null;
@@ -216,9 +245,16 @@ export async function trackPose(
             crops.push(["track", Math.abs(predicted.angle) > 25 ? { ...predicted, angle: 0 } : { ...predicted, size: Math.min(predicted.size * 1.5, Math.min(W, H)) }]);
           }
         } else {
+          // Not tracking: search around the motion focus with a few crop sizes (a small athlete in a
+          // portrait frame is too small for the model on the full frame), then the full frame.
+          // The sizes rotate from sample to sample so every size gets its turn.
           if (m) {
-            const c = cropFromMotion(m.focusX, m.fgYMedian, o.grayWidth, W, H);
-            if (c) crops.push(["motion", c]);
+            const sizes = [0.45, 0.3, 0.7];
+            for (let j = 0; j < 2; j++) {
+              const c = cropFromMotion(m.focusX, m.fgYMedian, o.grayWidth, W, H, sizes[(searchTurn + j) % sizes.length]);
+              if (c) crops.push(["motion", c]);
+            }
+            searchTurn++;
           }
           crops.push(["full", null]);
         }
@@ -243,6 +279,8 @@ export async function trackPose(
           if (points && fitsPrediction(points)) break;
         }
         samples.push({ time, candidates });
+        const unclear = !candidates.length || !fitsPrediction(candidates[candidates.length - 1].points) || candidates.length > 1;
+        if (unclear && recent) denseUntil = time + o.denseHold;
         if (!candidates.length) return;
 
         // Online pick (only to steer the next crop): closest to the predicted pose
@@ -278,9 +316,19 @@ export async function trackPose(
           velocity = { x: 0, y: 0, turn: 0 };
         }
         last = { time, points: pick.points };
+        const torsoLen = poseFeatures({ time, points: pick.points, source: "track" }).scale || 0.1;
+        if (Math.abs(velocity.turn) > o.denseTurn || Math.hypot(velocity.x, velocity.y) / torsoLen > o.denseSpeed) {
+          denseUntil = time + o.denseHold;
+        }
         if (o.line) observeLine(time, pick.points);
       },
-      { fps: o.fps, adaptive: true, onProgress: o.onProgress, signal: o.signal },
+      {
+        fps: o.fps,
+        pauseWhileWorking: true,
+        nextStep: () => 1 / (currentTime < denseUntil ? o.denseFps : o.fps),
+        onProgress: o.onProgress,
+        signal: o.signal,
+      },
     );
   } finally {
     landmarker.close();
@@ -299,7 +347,7 @@ export async function trackPose(
     }
   }
   const sampled = samples.length;
-  return { keypoints: KEYPOINTS, videoWidth: W, videoHeight: H, frames, sampled, missed };
+  return { keypoints: KEYPOINTS, videoWidth: W, videoHeight: H, frames, sampled, missed, dense };
 
 }
 

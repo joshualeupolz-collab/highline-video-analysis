@@ -4,6 +4,7 @@
  *
  *   npm run evaluate            # all marked videos
  *   npm run evaluate -- 0.5     # with a different tolerance in seconds (default 0.3)
+ *   DETECT_OPTS='{"plateauFraction":0}' npm run evaluate   # try other detector settings
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -38,7 +39,7 @@ for (const f of marked) {
     const m = tracker.push(frame);
     if (m) motions.push(m);
   }
-  const result = detectCutPoints(motions, duration);
+  const result = detectCutPoints(motions, duration, JSON.parse(process.env.DETECT_OPTS ?? "{}"));
   const ev = evaluateCutPoints(marks.bdc, result.cutPoints.map((c) => c.time), tolerance);
   truthTotal += marks.bdc.length;
   matchTotal += ev.matches.length;

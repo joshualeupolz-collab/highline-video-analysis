@@ -171,8 +171,24 @@ export async function trackPose(
     const contacts: LineObservation["contacts"] = [];
     const feet = mean(["leftAnkle", "rightAnkle", "leftHeel", "rightHeel", "leftToe", "rightToe"]);
     const hands = mean(["leftWrist", "rightWrist"]);
-    if (feet) contacts.push({ via: "feet", point: feet, scores: rayScores(gray, feet, f.scale).map((v) => round(v, 2)) });
-    if (hands) contacts.push({ via: "hands", point: hands, scores: rayScores(gray, hands, f.scale).map((v) => round(v, 2)) });
+    // Directions that cannot be the line: along the athlete's own limbs from the contact point, and
+    // (nearly) vertical, where the leash or a rope to a backup line hangs
+    const masked = (point: [number, number], scores: number[], towards: [number, number][]) =>
+      scores.map((v, i) => {
+        const a = (i * 360) / scores.length;
+        const vertical = Math.min(Math.abs(a - 90), Math.abs(a - 270)) < 10;
+        const alongBody = towards.some(([x, y]) => {
+          const b = (Math.atan2(y - point[1], x - point[0]) * 180) / Math.PI;
+          const d = Math.abs(((a - b) % 360) + 360) % 360;
+          return Math.min(d, 360 - d) < 20;
+        });
+        return vertical || alongBody ? 0 : round(v, 2);
+      });
+    const at = (names: (typeof KEYPOINTS)[number][]) =>
+      names.map((n) => mean([n])).filter((p): p is [number, number] => !!p);
+    if (feet) contacts.push({ via: "feet", point: feet, scores: masked(feet, rayScores(gray, feet, f.scale), at(["leftKnee", "rightKnee", "leftHip", "rightHip"])) });
+    // Hands only when the body is not upright (hanging below the line, upside down)
+    if (hands && !(Math.abs(f.tilt) < 60)) contacts.push({ via: "hands", point: hands, scores: masked(hands, rayScores(gray, hands, f.scale), at(["leftElbow", "rightElbow", "leftShoulder", "rightShoulder"])) });
     lineObs.push({ time, torso: f.scale, contacts });
   };
 
@@ -206,10 +222,25 @@ export async function trackPose(
           }
           crops.push(["full", null]);
         }
+        // Second look only when the first does not fit the prediction (saves about half the time)
+        const fitsPrediction = (points: number[]) => {
+          if (!recent) return meanVis(points) >= 0.6;
+          const dt = time - recent.time;
+          const a = poseFeatures({ time: recent.time, points: recent.points, source: "track" });
+          const b = poseFeatures({ time, points, source: "track" });
+          const turn = Math.max(-o.turnRate, Math.min(o.turnRate, velocity.turn));
+          const expected = a.tilt + turn * dt;
+          const dTilt = Math.abs(((b.tilt - expected + 540) % 360) - 180);
+          const ca = centreOf(recent.points);
+          const cb = centreOf(points);
+          const moved = ca && cb ? Math.hypot(cb[0] - (ca[0] + velocity.x * dt), cb[1] - (ca[1] + velocity.y * dt)) : Infinity;
+          return meanVis(points) >= 0.5 && dTilt < 40 && moved < 0.5 * (a.scale || 0.1);
+        };
         const candidates: PoseCandidate[] = [];
         for (const [source, crop] of crops) {
           const points = run(crop);
           if (points) candidates.push({ points, source });
+          if (points && fitsPrediction(points)) break;
         }
         samples.push({ time, candidates });
         if (!candidates.length) return;

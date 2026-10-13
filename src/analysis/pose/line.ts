@@ -46,7 +46,7 @@ export const defaultLineOptions: LineOptions = {
   minOpening: 130,
   reach: 0.3,
   startTorso: 0.6,
-  widths: [1.5, 3],
+  widths: [1.5, 3, 6],
   minScore: 6,
 };
 

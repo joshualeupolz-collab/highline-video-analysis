@@ -47,7 +47,7 @@ export interface TrackOptions {
 export const defaultTrackOptions: TrackOptions = {
   minVisibility: 0.3,
   freeSpeed: 6,
-  freeTurn: 500,
+  freeTurn: 900,
   noneCost: 3,
   jumpWeight: 2,
   turnWeight: 2,

@@ -92,10 +92,10 @@
           <option value="lite">pose: fast</option>
           <option value="full" selected>pose: accurate</option>
         </select>
-        <select id="poseFps" aria-label="Pose samples per second">
-          <option value="8">8 poses/s</option>
-          <option value="15" selected>15 poses/s</option>
-          <option value="30">30 poses/s (slow)</option>
+        <select id="poseFps" aria-label="Pose samples per second in calm phases">
+          <option value="6">6 poses/s (+ every frame in fast moves)</option>
+          <option value="10" selected>10 poses/s (+ every frame in fast moves)</option>
+          <option value="15">15 poses/s (+ every frame in fast moves)</option>
         </select>
         <label class="check"><input id="skeleton" type="checkbox" checked /> Show skeleton</label>
         <label class="check"><input id="showLine" type="checkbox" /> Show line (experimental)</label>

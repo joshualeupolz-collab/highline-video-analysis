@@ -84,6 +84,14 @@ export interface PlayOptions {
   fps: number;
   /** Fixed playback speed. Ignored when `adaptive` is set. */
   playbackRate?: number;
+  /** Seconds until the next wanted sample, asked after every sample (default 1 / fps). */
+  nextStep?: () => number;
+  /**
+   * Pause the video while `onFrame` works, so slow work (a phone's first GPU inference can take
+   * seconds) never makes the video run past wanted samples. Playback speed between samples then
+   * follows the step: about every frame is presented when the step is one frame.
+   */
+  pauseWhileWorking?: boolean;
   /**
    * Adjust the playback speed to how long `onFrame` takes, so that slow per-frame work (pose
    * detection) still gets about `fps` samples per video second.
@@ -104,7 +112,7 @@ export async function playFrames(
 ): Promise<number> {
   const v = video as VideoWithRvfc;
   const duration = video.duration;
-  const step = 1 / o.fps;
+  let step = 1 / o.fps;
 
   if (!v.requestVideoFrameCallback) {
     for (let t = 0; t < duration; t += step) {
@@ -113,6 +121,7 @@ export async function playFrames(
       await once(video, "seeked");
       onFrame(t);
       o.onProgress?.(t / duration);
+      step = o.nextStep?.() ?? step;
     }
     return duration;
   }
@@ -147,16 +156,23 @@ export async function playFrames(
       }
       if (meta.mediaTime - last >= step * 0.9) {
         last = meta.mediaTime;
+        if (o.pauseWhileWorking) video.pause();
         const started = performance.now();
         onFrame(meta.mediaTime);
-        busy += performance.now() - started;
-        calls++;
+        const work = (performance.now() - started) / 1000;
         o.onProgress?.(meta.mediaTime / duration);
-        if (o.adaptive && calls % 5 === 0) {
-          // Leave ~30 % headroom: video seconds per wall second = 1 / (fps * work per sample)
-          const perSample = busy / calls / 1000;
-          const next = Math.max(0.25, Math.min(4, 0.7 / (o.fps * Math.max(perSample, 1e-3))));
-          if (Math.abs(next - rate) / rate > 0.15) {
+        step = o.nextStep?.() ?? step;
+        if (o.pauseWhileWorking) {
+          // 30 fps video: speed 1 presents every frame; larger steps may run faster
+          const want = Math.max(0.5, Math.min(2, step * 30));
+          if (Math.abs(want - video.playbackRate) > 0.05) video.playbackRate = want;
+          if (video.currentTime < duration) video.play().catch(() => undefined);
+        } else if (o.adaptive) {
+          // Video may advance by `step` while one sample's work takes `work`: keep ~30 % headroom
+          busy = busy ? busy * 0.8 + work * 0.2 : work;
+          calls++;
+          const next = Math.max(0.25, Math.min(4, (0.7 * step) / Math.max(busy, 1e-3)));
+          if (calls >= 3 && Math.abs(next - rate) / rate > 0.15) {
             rate = next;
             video.playbackRate = rate;
           }

@@ -33,7 +33,12 @@ export function poseAt(track: PoseTrack, t: number, maxGap = 0.2): PoseFrame | n
 }
 
 /** Draws `pose` over the displayed video picture (object-fit: contain). */
-export function drawSkeleton(canvas: HTMLCanvasElement, video: HTMLVideoElement, pose: PoseFrame | null) {
+export function drawSkeleton(
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  pose: PoseFrame | null,
+  show: { skeleton: boolean; line: boolean } = { skeleton: true, line: true },
+) {
   const dpr = window.devicePixelRatio || 1;
   const vw = video.clientWidth;
   const vh = video.clientHeight;
@@ -60,7 +65,7 @@ export function drawSkeleton(canvas: HTMLCanvasElement, video: HTMLVideoElement,
   const style = getComputedStyle(document.documentElement);
   const colors = ["#ffffff", style.getPropertyValue("--left").trim() || "#0ea5e9", style.getPropertyValue("--right").trim() || "#f43f5e"];
   ctx.lineCap = "round";
-  for (const [a, b, side] of BONES) {
+  for (const [a, b, side] of show.skeleton ? BONES : []) {
     const pa = px(a);
     const pb = px(b);
     if (!pa || !pb) continue;
@@ -74,8 +79,29 @@ export function drawSkeleton(canvas: HTMLCanvasElement, video: HTMLVideoElement,
     ctx.lineWidth = 2.5;
     ctx.stroke();
   }
+  if (pose.line && show.line) {
+    // Experimental line: two rays from the contact point
+    const l = pose.line;
+    const W = video.videoWidth * k;
+    const c = [ox + l.contact[0] * W, oy + l.contact[1] * W];
+    ctx.setLineDash([8, 5]);
+    for (const a of l.angles) {
+      const ux = Math.cos((a * Math.PI) / 180);
+      const uy = Math.sin((a * Math.PI) / 180);
+      ctx.strokeStyle = "rgba(0,0,0,0.5)";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(c[0] + ux * l.start * W * 0.3, c[1] + uy * l.start * W * 0.3);
+      ctx.lineTo(c[0] + ux * (l.start + l.reach) * W, c[1] + uy * (l.start + l.reach) * W);
+      ctx.stroke();
+      ctx.strokeStyle = "#facc15";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
   const head = px(i.nose);
-  if (head) {
+  if (head && show.skeleton) {
     ctx.fillStyle = "#ffffff";
     ctx.beginPath();
     ctx.arc(head[0], head[1], 4, 0, Math.PI * 2);

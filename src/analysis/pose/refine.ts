@@ -1,26 +1,27 @@
 import { medianFilter, resampleUniform } from "../signal";
 import type { CutPoint } from "../types";
 import { cameraAt, type CameraPath } from "./camera";
-import { poseFeatures } from "./features";
+import { legExtension, legReference, poseFeatures } from "./features";
 import type { PoseFeatures, PoseSignals, PoseTrack } from "./types";
 
 export interface RefineOptions {
   /**
    * How the pose may move the motion-based time:
-   * - "blend" (default): the mean of the motion time and the "knee" time, where the knees can be
+   * - "blend" (default): the mean of the motion time and the "legs" time, where the legs can be
    *   seen to straighten; else the motion time. Two independent estimates average out some noise:
-   *   slightly better than either alone on the hand-marked videos (e.g. video-05 0.077 → 0.057 s).
+   *   slightly better than either alone on the hand-marked videos (e.g. video-05 0.077 → 0.071 s).
    * - "off": keep the motion time (only annotate the knee angle).
-   * - "knee": the moment the knees straighten (knee angle rises through `kneeStraight` after being
-   *   below `kneeBent`), which is when the owner marks the BDC in video-01.
+   * - "legs": the moment the legs straighten – the hip-to-feet distance rises through `legStraight`
+   *   % of the straight-leg length after being below `legBent` % (the owner marks the BDC about
+   *   there in video-01). The knee angle gives the same timing.
    * - "feet": centre of the plateau where the feet (camera-corrected) are lowest.
    */
-  mode: "blend" | "off" | "knee" | "feet";
+  mode: "blend" | "off" | "legs" | "feet";
   /** Weight of the knee time in mode "blend" (0..1). */
   blendWeight: number;
-  /** Knee angle (degrees) counted as straight / clearly bent for mode "knee". */
-  kneeStraight: number;
-  kneeBent: number;
+  /** Leg extension (% of straight) counted as straight / clearly bent for mode "legs". */
+  legStraight: number;
+  legBent: number;
   /** Search window around each motion-based cut point (seconds). */
   window: number;
   /** Plateau of the lowest feet: samples within this fraction of the feet's travel below the lowest point. */
@@ -34,8 +35,8 @@ export interface RefineOptions {
 export const defaultRefineOptions: RefineOptions = {
   mode: "blend",
   blendWeight: 0.5,
-  kneeStraight: 165,
-  kneeBent: 150,
+  legStraight: 95,
+  legBent: 85,
   window: 0.6,
   plateauFraction: 0.3,
   minSamples: 4,
@@ -44,16 +45,19 @@ export const defaultRefineOptions: RefineOptions = {
 
 export type RefinedCutPoint = CutPoint & Required<Pick<CutPoint, "motionTime" | "method" | "knee">>;
 
-/** Time near t0 where the knee angle rises through `kneeStraight` after being bent, or null. */
-function kneeStraightening(features: PoseFeatures[], t0: number, o: RefineOptions): number | null {
-  const near = features.filter((f) => Math.abs(f.time - t0) <= o.window && Number.isFinite(f.knee));
-  const k = medianFilter(near.map((f) => f.knee), 3);
+/** Time near t0 where the legs straighten (extension rises through `legStraight` after being bent), or null. */
+function legStraightening(features: PoseFeatures[], ref: number, t0: number, o: RefineOptions): number | null {
+  const near = features
+    .filter((f) => Math.abs(f.time - t0) <= o.window)
+    .map((f) => ({ time: f.time, legs: legExtension(f, ref) }))
+    .filter((f) => Number.isFinite(f.legs));
+  const k = medianFilter(near.map((f) => f.legs), 3);
   let best: number | null = null;
   for (let i = 1; i < near.length; i++) {
-    if (!(k[i] >= o.kneeStraight && k[i - 1] < o.kneeStraight)) continue;
-    const bentBefore = near.some((f, j) => j < i && near[i].time - f.time <= 0.6 && k[j] <= o.kneeBent);
+    if (!(k[i] >= o.legStraight && k[i - 1] < o.legStraight)) continue;
+    const bentBefore = near.some((f, j) => j < i && near[i].time - f.time <= 0.6 && k[j] <= o.legBent);
     if (!bentBefore) continue;
-    const t = near[i - 1].time + ((near[i].time - near[i - 1].time) * (o.kneeStraight - k[i - 1])) / (k[i] - k[i - 1]);
+    const t = near[i - 1].time + ((near[i].time - near[i - 1].time) * (o.legStraight - k[i - 1])) / (k[i] - k[i - 1]);
     if (best === null || Math.abs(t - t0) < Math.abs(best - t0)) best = t;
   }
   return best;
@@ -79,6 +83,7 @@ export function refineWithPose(
   const features = track.frames.map(poseFeatures);
   const scales = features.map((f) => f.scale).filter((s) => Number.isFinite(s) && s > 0).sort((a, b) => a - b);
   const scale = scales.length ? scales[scales.length >> 1] : NaN;
+  const legRef = legReference(features);
 
   return cutPoints.map((cp) => {
     const shot = cameraAt(path, cp.time).shot;
@@ -90,10 +95,10 @@ export function refineWithPose(
     };
     const keep: RefinedCutPoint = { ...cp, motionTime: cp.time, method: "motion", knee: kneeAt(cp.time) };
     if (o.mode === "off") return keep;
-    if (o.mode === "knee" || o.mode === "blend") {
-      const k = kneeStraightening(features, cp.time, o);
+    if (o.mode === "legs" || o.mode === "blend") {
+      const k = legStraightening(features, legRef, cp.time, o);
       if (k === null) return keep;
-      const t = o.mode === "knee" ? k : cp.time + o.blendWeight * (k - cp.time);
+      const t = o.mode === "legs" ? k : cp.time + o.blendWeight * (k - cp.time);
       return { ...cp, time: t, motionTime: cp.time, method: "pose", knee: kneeAt(t) };
     }
     if (samples.length < o.minSamples || !Number.isFinite(scale)) return keep;
@@ -147,10 +152,12 @@ export function poseSignals(track: PoseTrack, path: CameraPath, rate: number, co
   const feetWorld = f.map((x) => (Number.isFinite(x.feetY) ? (x.feetY - cameraAt(path, x.time).camY) / scale : NaN));
   const finite = feetWorld.filter(Number.isFinite);
   const m = finite.length ? finite.reduce((a, b) => a + b, 0) / finite.length : 0;
+  const ref = legReference(f);
   return {
     rate,
     t0: 0,
     knee: grid(despike(f.map((x) => x.knee)), times, 0.25),
+    legs: grid(despike(f.map((x) => legExtension(x, ref))), times, 0.25),
     tilt: grid(despike(f.map((x) => Math.abs(x.tilt))), times, 0.25),
     feet: grid(feetWorld.map((v) => v - m), times, 0.25),
   };

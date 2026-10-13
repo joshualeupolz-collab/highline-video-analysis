@@ -1,6 +1,6 @@
 import { analyze } from "../analysis/analyze";
 import { evaluateCutPoints } from "../analysis/evaluate";
-import { poseFeatures } from "../analysis/pose/features";
+import { legExtension, legReference, poseFeatures } from "../analysis/pose/features";
 import { bounceProfiles } from "../analysis/pose/profile";
 import type { AnalysisResult } from "../analysis/types";
 import { drawSkeleton, poseAt } from "./skeleton";
@@ -243,6 +243,10 @@ function views(): [TimelineView, TimelineView] {
 function refresh() {
   if (!current) return;
   $("time").textContent = `${time().toFixed(2)} s`;
+  const scrub = $("scrub") as HTMLInputElement;
+  if (video.duration) scrub.max = String(video.duration);
+  if (document.activeElement !== scrub) scrub.value = String(time());
+  $("playBtn").textContent = video.paused ? "▶" : "❚❚";
   const [a, b] = views();
   const data = {
     auto: showAuto() ? current.auto : null,
@@ -258,12 +262,17 @@ function refresh() {
   renderStats();
 }
 
+let legRefCache: { track: unknown; ref: number } | null = null;
+
 function renderPose(view: TimelineView) {
   const pose = current?.auto?.pose;
   poseChart.hidden = !pose;
   $("poseLegend").hidden = !pose;
   const frame = pose ? poseAt(pose.track, time()) : null;
-  drawSkeleton(overlay, video, ($("skeleton") as HTMLInputElement).checked ? frame : null);
+  drawSkeleton(overlay, video, frame, {
+    skeleton: ($("skeleton") as HTMLInputElement).checked,
+    line: ($("showLine") as HTMLInputElement).checked,
+  });
   const info = $("poseInfo");
   if (!pose) {
     info.textContent = "";
@@ -279,10 +288,13 @@ function renderPose(view: TimelineView) {
     return;
   }
   const f = poseFeatures(frame);
+  legRefCache ??= { track: pose.track, ref: legReference(pose.track.frames.map(poseFeatures)) };
+  if (legRefCache.track !== pose.track) legRefCache = { track: pose.track, ref: legReference(pose.track.frames.map(poseFeatures)) };
+  const legs = legExtension(f, legRefCache.ref);
   const deg = (v: number) => (Number.isFinite(v) ? `${Math.round(v)}°` : "–");
   info.textContent =
-    `knee L ${deg(f.kneeLeft)} R ${deg(f.kneeRight)} · hip ${deg(f.hip)} · tilt ${deg(f.tilt)}` +
-    `${f.upright ? "" : " (not upright)"} · found by ${frame.source}`;
+    `hip–feet ${Number.isFinite(legs) ? Math.round(legs) + " %" : "–"} · knee L ${deg(f.kneeLeft)} R ${deg(f.kneeRight)}` +
+    ` · hip ${deg(f.hip)} · tilt ${deg(f.tilt)} · pose at ${frame.time.toFixed(2)} s`;
 }
 
 /** The bounce around time t: from the last BDC at or before t to the next one. */
@@ -358,17 +370,21 @@ function renderStats() {
     const marks = current.marks.bdc.length >= 2 ? current.marks.bdc : auto.cutPoints.map((c) => c.time);
     const rows = bounceProfiles(pose.track, marks);
     const deg = (v: number) => (Number.isFinite(v) ? `${Math.round(v)}°` : "–");
+    const pct = (v: number) => (Number.isFinite(v) ? `${Math.round(v)} %` : "–");
     const name = (start: number) => current!.marks.tricks.find((t) => Math.abs(t.start - start) < 0.15)?.name ?? "";
     parts.push(`<h3>Body per bounce</h3>
-      <p class="hint">Between ${current.marks.bdc.length >= 2 ? "your" : "the automatic"} BDC marks. Rotation: 360° = one
-        full turn of the upper body in the picture. Click a row to jump there.</p>
+      <p class="hint">Between ${current.marks.bdc.length >= 2 ? "your" : "the automatic"} BDC marks. Hip–feet: distance
+        hip to feet in % of the distance with straight legs (100 % = straight, smaller = knees bent). Rotation: 360° =
+        one full turn of the upper body in the picture. Pose found: share of this bounce's pose samples with a body.
+        Click a row to jump there.</p>
       <div class="scroll"><table class="bounces">
-      <tr><th>from</th><th>trick</th><th>knee at BDC</th><th>min knee</th><th>min hip</th><th>max tilt</th>
-        <th>rotation</th><th>upside down</th><th>arms up</th><th>pose found</th></tr>
+      <tr><th>from</th><th>trick</th><th>hip–feet at BDC</th><th>smallest hip–feet</th><th>min hip angle</th>
+        <th>max tilt</th><th>rotation</th><th>upside down</th><th>arms up</th><th>pose found</th></tr>
       ${rows
         .map(
           (r) => `<tr data-seek="${r.start}"><td class="mono">${r.start.toFixed(2)} s</td><td>${escapeHtml(name(r.start))}</td>
-        <td>${deg(r.kneeAtStart)}</td><td>${deg(r.kneeMin)}</td><td>${deg(r.hipMin)}</td><td>${deg(r.tiltMax)}</td>
+        <td>${pct(r.legsAtStart)}</td><td>${pct(r.legsMin)}${Number.isFinite(r.legsMinAt) ? ` <span class="hint">at +${r.legsMinAt.toFixed(1)} s</span>` : ""}</td>
+        <td>${deg(r.hipMin)}</td><td>${deg(r.tiltMax)}</td>
         <td>${deg(r.rotation)}</td><td>${r.invertedTime.toFixed(1)} s</td>
         <td>${Number.isFinite(r.armsUp) ? Math.round(r.armsUp * 100) + " %" : "–"}</td>
         <td>${Math.round(r.coverage * 100)} %</td></tr>`,
@@ -449,6 +465,7 @@ async function runAnalysis() {
       pose: usePose
         ? {
             model: ($("poseModel") as HTMLSelectElement).value as "lite" | "full",
+            fps: Number(($("poseFps") as HTMLSelectElement).value),
             // ?cpu forces the CPU delegate (headless test browsers have no real GPU)
             delegate: new URLSearchParams(location.search).has("cpu") ? "CPU" : "GPU",
           }
@@ -460,7 +477,10 @@ async function runAnalysis() {
     const pose = entry.auto.pose;
     statusEl.textContent =
       `done in ${((performance.now() - started) / 1000).toFixed(1)} s` +
-      (pose ? ` · pose found in ${pose.track.frames.length} of ${pose.track.sampled} frames` : "");
+      (pose
+        ? ` · pose found in ${pose.track.frames.length} of ${pose.track.sampled} pose samples ` +
+          `(${Math.round((100 * pose.track.frames.length) / Math.max(1, pose.track.sampled))} %)`
+        : "");
   } catch (err) {
     statusEl.textContent = (err as Error).name === "AbortError" ? "stopped" : `error: ${err}`;
   } finally {
@@ -470,6 +490,29 @@ async function runAnalysis() {
     if (current === entry) refresh();
   }
 }
+
+// ---------- full screen ----------
+
+/** Full screen for the whole stage (video + skeleton + buttons); CSS fallback where the API is missing (iPhone). */
+function toggleFullscreen() {
+  const stage = $("stage") as HTMLElement & { webkitRequestFullscreen?: () => void };
+  const doc = document as Document & { webkitFullscreenElement?: Element; webkitExitFullscreen?: () => void };
+  if (document.fullscreenElement || doc.webkitFullscreenElement) {
+    (document.exitFullscreen?.() ?? doc.webkitExitFullscreen?.()) as unknown;
+    return;
+  }
+  if (stage.classList.contains("pseudo-fs")) {
+    stage.classList.remove("pseudo-fs");
+    refresh();
+    return;
+  }
+  const request = stage.requestFullscreen?.bind(stage) ?? stage.webkitRequestFullscreen?.bind(stage);
+  if (request) {
+    Promise.resolve(request()).catch(() => stage.classList.add("pseudo-fs"));
+  } else stage.classList.add("pseudo-fs");
+  refresh();
+}
+document.addEventListener("fullscreenchange", () => setTimeout(refresh, 50));
 
 // ---------- saving ----------
 
@@ -514,6 +557,7 @@ const actions: Record<string, () => void> = {
   prev: () => jump(-1),
   next: () => jump(1),
   analyze: runAnalysis,
+  fullscreen: toggleFullscreen,
   save: () => {
     if (!current) return;
     const m = { ...current.marks, duration: video.duration, savedAt: new Date().toISOString() };
@@ -579,8 +623,15 @@ document.addEventListener("keydown", (ev) => {
     N: "next",
     p: "prev",
     P: "prev",
+    f: "fullscreen",
+    F: "fullscreen",
+    Escape: "exit-fullscreen",
   };
   const act = map[ev.key];
+  if (act === "exit-fullscreen") {
+    if ($("stage").classList.contains("pseudo-fs")) toggleFullscreen();
+    return;
+  }
   if (act) {
     ev.preventDefault();
     actions[act]();
@@ -616,7 +667,11 @@ video.addEventListener("ratechange", () => {
   ($("rate") as HTMLSelectElement).value = String(video.playbackRate);
 });
 trickInput.addEventListener("change", () => setTrick(trickInput.value));
+($("scrub") as HTMLInputElement).addEventListener("input", (ev) => seek(Number((ev.target as HTMLInputElement).value)));
+video.addEventListener("play", refresh);
+video.addEventListener("pause", refresh);
 ($("skeleton") as HTMLInputElement).addEventListener("change", refresh);
+($("showLine") as HTMLInputElement).addEventListener("change", refresh);
 attachTimeline(overview, 0);
 attachTimeline(detail, 1);
 new ResizeObserver(refresh).observe(overview);

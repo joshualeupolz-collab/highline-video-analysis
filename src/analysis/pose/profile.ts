@@ -1,4 +1,4 @@
-import { point, poseFeatures } from "./features";
+import { legExtension, legReference, point, poseFeatures } from "./features";
 import { despike } from "./refine";
 import type { PoseFrame, PoseTrack } from "./types";
 
@@ -11,6 +11,11 @@ export interface BounceProfile {
   end: number;
   /** Share of pose samples in the bounce where a pose was found (0..1). */
   coverage: number;
+  /** Hip-to-feet distance in % of straight legs at the start BDC, and the smallest one (tuck). */
+  legsAtStart: number;
+  legsMin: number;
+  /** When the smallest leg extension happened, relative to the start (s). */
+  legsMinAt: number;
   /** Knee angle at the start BDC (180 = straight). */
   kneeAtStart: number;
   /** Smallest knee angle (tucked legs) and when it happened, relative to the start. */
@@ -59,8 +64,10 @@ export function unwrappedRotation(angles: number[], maxStep = 100): number {
   return total;
 }
 
-export function bounceProfiles(track: PoseTrack, bdcTimes: number[], fps = 8): BounceProfile[] {
+export function bounceProfiles(track: PoseTrack, bdcTimes: number[]): BounceProfile[] {
   const times = [...bdcTimes].sort((a, b) => a - b);
+  const legRef = legReference(track.frames.map(poseFeatures));
+  const missed = track.missed ?? [];
   const out: BounceProfile[] = [];
   for (let i = 0; i + 1 < times.length; i++) {
     const start = times[i];
@@ -79,9 +86,20 @@ export function bounceProfiles(track: PoseTrack, bdcTimes: number[], fps = 8): B
     });
     const startFeats = track.frames.filter((f) => Math.abs(f.time - start) <= 0.2).map(poseFeatures);
     const kneeStart = finite(startFeats.map((f) => f.knee));
+    const legsStart = finite(startFeats.map((f) => legExtension(f, legRef)));
+    const legs = despike(feats.map((f) => legExtension(f, legRef)));
+    let legsMin = NaN;
+    let legsMinAt = NaN;
+    legs.forEach((l, j) => {
+      if (Number.isFinite(l) && !(l >= legsMin)) {
+        legsMin = l;
+        legsMinAt = feats[j].time - start;
+      }
+    });
+    const misses = missed.filter((t) => t >= start && t < end).length;
     const angles = frames.map(torsoAngle);
     const tilts = finite(despike(angles.map(Math.abs)));
-    const step = frames.length > 1 ? (frames[frames.length - 1].time - frames[0].time) / (frames.length - 1) : 1 / fps;
+    const step = frames.length > 1 ? (frames[frames.length - 1].time - frames[0].time) / (frames.length - 1) : 0;
     const armsUp = frames.filter((f) => {
       const ls = point(f, "leftShoulder");
       const rs = point(f, "rightShoulder");
@@ -92,7 +110,10 @@ export function bounceProfiles(track: PoseTrack, bdcTimes: number[], fps = 8): B
     out.push({
       start,
       end,
-      coverage: Math.min(1, frames.length / Math.max(1, (end - start) * fps)),
+      coverage: frames.length + misses ? frames.length / (frames.length + misses) : 0,
+      legsAtStart: legsStart.length ? legsStart.reduce((a, b) => a + b, 0) / legsStart.length : NaN,
+      legsMin,
+      legsMinAt,
       kneeAtStart: kneeStart.length ? kneeStart.reduce((a, b) => a + b, 0) / kneeStart.length : NaN,
       kneeMin,
       kneeMinAt,

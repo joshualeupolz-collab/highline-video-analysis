@@ -176,7 +176,7 @@ export function drawPoseChart(
   const hi = Math.max(...finite, 0);
   plot(pose.feet, (v) => 1 - (v - lo) / (hi - lo || 1), css("--feet"));
   plot(pose.tilt, (v) => v / 180, css("--tilt"));
-  plot(pose.knee, (v) => (v - 60) / 120, css("--knee"));
+  plot(pose.legs, (v) => (v - 50) / 50, css("--knee"));
 
   ctx.lineWidth = 2;
   ctx.strokeStyle = css("--good");

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { cameraAt, cameraPath } from "../src/analysis/pose/camera";
-import { angleAt, poseFeatures } from "../src/analysis/pose/features";
+import { angleAt, legExtension, legReference, poseFeatures } from "../src/analysis/pose/features";
 import { bounceProfiles, unwrappedRotation } from "../src/analysis/pose/profile";
 import { refineWithPose } from "../src/analysis/pose/refine";
-import { cropFromPose, squareCrop } from "../src/analysis/pose/roi";
+import { angleDiff, cropFromPose, fromCrop, squareCrop } from "../src/analysis/pose/roi";
 import { KEYPOINTS, type PoseFrame, type PoseTrack } from "../src/analysis/pose/types";
 import type { FrameMotion } from "../src/analysis/types";
 
@@ -51,6 +51,14 @@ const track = (frames: PoseFrame[]): PoseTrack => ({
 });
 
 describe("pose features", () => {
+  it("measures leg extension relative to straight legs", () => {
+    const fs = [...Array(6)].map((_, i) => poseFeatures(figure(i))).concat(poseFeatures(figure(9, { knee: 90 })));
+    const ref = legReference(fs);
+    expect(legExtension(fs[0], ref)).toBeCloseTo(100);
+    // Knee at 90°: hip-ankle distance is sqrt(0.1² + 0.1²) of a straight 0.2
+    expect(legExtension(fs[6], ref)).toBeCloseTo(70.7, 0);
+  });
+
   it("measures joint angles", () => {
     expect(angleAt([0, 0], [1, 0], [2, 0])).toBeCloseTo(180);
     expect(angleAt([0, 1], [0, 0], [1, 0])).toBeCloseTo(90);
@@ -71,16 +79,31 @@ describe("pose features", () => {
 describe("crops", () => {
   it("keeps crops inside the frame", () => {
     const c = squareCrop(10, 10, 200, 1000, 500);
-    expect(c).toEqual({ x: 0, y: 0, size: 200 });
+    expect(c).toEqual({ cx: 100, cy: 100, size: 200, angle: 0 });
     expect(squareCrop(500, 250, 2000, 1000, 500).size).toBe(500);
+  });
+
+  it("maps crop coordinates back, also for turned crops", () => {
+    const c = { cx: 500, cy: 300, size: 200, angle: 90 };
+    expect(fromCrop(c, 0.5, 0.5)).toEqual([500, 300]);
+    // Crop "up" (v < 0.5) points to the right in the image when the crop is turned by 90°
+    const [x, y] = fromCrop(c, 0.5, 0);
+    expect(x).toBeCloseTo(600);
+    expect(y).toBeCloseTo(300);
+    expect(angleDiff(170, -170)).toBeCloseTo(20);
+  });
+
+  it("turns the crop with the body", () => {
+    const c = cropFromPose(figure(0, { rot: 90 }), 1000, 1000)!;
+    expect(c.angle).toBeCloseTo(90, 0);
   });
 
   it("crops around a pose with padding", () => {
     const c = cropFromPose(figure(0), 1000, 1000)!;
     // The figure spans about 0.14 x 0.31 frame widths
     expect(c.size).toBeGreaterThan(0.31 * 1000);
-    expect(c.x).toBeLessThan(500);
-    expect(c.x + c.size).toBeGreaterThan(500);
+    expect(c.cx).toBeCloseTo(500, -1);
+    expect(c.angle).toBeCloseTo(0, 0);
   });
 });
 
@@ -98,9 +121,9 @@ describe("camera path", () => {
 describe("refineWithPose", () => {
   const path = cameraPath([], 160);
   // Knees bent until 2.0 s, straight afterwards
-  const frames = Array.from({ length: 40 }, (_, i) => figure(i * 0.1, { knee: i * 0.1 < 2.0 ? 120 : 178 }));
+  const frames = Array.from({ length: 40 }, (_, i) => figure(i * 0.1, { knee: i * 0.1 < 2.0 ? 100 : 178 }));
 
-  it("blends motion and knee time by default", () => {
+  it("blends motion and leg-straightening time by default", () => {
     const [c] = refineWithPose([{ time: 2.3, confidence: 1 }], track(frames), path);
     expect(c.method).toBe("pose");
     expect(c.motionTime).toBe(2.3);
@@ -115,8 +138,8 @@ describe("refineWithPose", () => {
     expect(c.knee).toBeGreaterThan(170);
   });
 
-  it("moves to the moment the knees straighten in knee mode", () => {
-    const [c] = refineWithPose([{ time: 2.3, confidence: 1 }], track(frames), path, { mode: "knee" });
+  it("moves to the moment the legs straighten in legs mode", () => {
+    const [c] = refineWithPose([{ time: 2.3, confidence: 1 }], track(frames), path, { mode: "legs" });
     expect(c.method).toBe("pose");
     expect(c.time).toBeGreaterThan(1.9);
     expect(c.time).toBeLessThan(2.05);
@@ -135,13 +158,14 @@ describe("bounce profiles", () => {
       const t = i * 0.1;
       frames.push(figure(t, { rot: (t / 3) * 360, knee: t > 1 && t < 2 ? 60 : 175, armsUp: t < 0.5 }));
     }
-    const [p] = bounceProfiles(track(frames), [0, 3], 10);
+    const [p] = bounceProfiles({ ...track(frames), missed: [1.05, 2.05] }, [0, 3]);
     expect(p.rotation).toBeGreaterThan(300);
     expect(p.kneeMin).toBeLessThan(70);
     expect(p.kneeMinAt).toBeGreaterThan(1);
     expect(p.tiltMax).toBeGreaterThan(160);
     expect(p.invertedTime).toBeGreaterThan(0.5);
     expect(p.armsUp).toBeGreaterThan(0.1);
-    expect(p.coverage).toBeCloseTo(1, 1);
+    expect(p.coverage).toBeCloseTo(30 / 32, 2);
+    expect(p.legsMin).toBeLessThan(80);
   });
 });

@@ -1,3 +1,5 @@
+import type { LineEstimate } from "./line";
+
 /** Body keypoints kept from the pose model, in this order. */
 export const KEYPOINTS = [
   "nose",
@@ -51,6 +53,8 @@ export interface PoseFrame {
   points: number[];
   /** Where the detection came from: crop around the last pose, crop from the motion focus, whole frame. */
   source: "track" | "motion" | "full";
+  /** Experimental: the tensioned line at this moment, if it was found. */
+  line?: LineEstimate;
 }
 
 export interface PoseTrack {
@@ -58,8 +62,10 @@ export interface PoseTrack {
   videoWidth: number;
   videoHeight: number;
   frames: PoseFrame[];
-  /** Times (s) at which the pose model was run, found or not. */
+  /** Number of samples the pose model was run on, found or not. */
   sampled: number;
+  /** Times (s) of samples without a (plausible) pose. */
+  missed?: number[];
 }
 
 /** Per-sample body measures derived from a pose (degrees and frame-width units). */
@@ -76,6 +82,8 @@ export interface PoseFeatures {
   tilt: number;
   /** Torso length (shoulder centre to hip centre). */
   scale: number;
+  /** Distance hip centre → ankle centre (frame-width units); see legExtension for the relative value. */
+  legSpan: number;
   /** Image y of the ankles / wrists / hips (mean of visible sides). */
   feetY: number;
   wristsY: number;
@@ -90,6 +98,8 @@ export interface PoseSignals {
   t0: number;
   /** Mean knee angle (degrees). */
   knee: number[];
+  /** Hip-to-feet distance in % of the distance with straight legs (100 = legs straight). */
+  legs: number[];
   /** Torso tilt, degrees away from upright (0 = upright, 180 = upside down). */
   tilt: number[];
   /** Feet height in torso lengths, camera-corrected (down = +), shot-wise mean removed. */

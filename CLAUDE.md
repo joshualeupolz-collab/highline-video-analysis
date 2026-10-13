@@ -164,6 +164,24 @@ The app stores "one video + a list of cut points" and has a cutting module witho
     06 67 %, 07 98 %, 08 100 %.
   - Speed (headless desktop Chromium, CPU delegate): ~1.3–1.9 s of analysis per second of video with
     pose (e.g. 36 s video in 50 s, 73 s video in 95 s). Phones use the GPU delegate; not measured yet.
+- **Round 2 of approach B (owner feedback 2026-10-13):**
+  - Skeleton flipped 180° (head at the knees) in video-08 at 12.8–13.2 s while the athlete hung
+    upright with arms up. Fixes: the crop is turned so the previous torso points up (also helps in
+    flips), and a pose that turns faster than 400°/s (+40° slack) since the last accepted pose is
+    rejected; then a wider crop and the motion crop are tried, else the sample is a miss.
+  - 15 pose samples per second by default (selectable 8 / 15 / 30); misses are stored
+    (`PoseTrack.missed`) so "pose found" per bounce is found / (found + missed).
+  - Owner prefers the hip-to-feet distance over the knee angle: `legSpan` and `legExtension`
+    (% of the median span with both knees ≥ 165°). Shown in the chart and the bounce table; the
+    "blend" refinement now uses it (legs straight = 95 % after < 85 %; same accuracy as the knee).
+  - Test page: own control bar instead of the native video controls (no play button over the
+    athlete), full screen of the whole stage (video + skeleton + buttons, CSS fallback on iPhone),
+    key F.
+  - Line (experimental, `line.ts`): rays from the contact point (feet when upright, hands) scored
+    for a thin straight ridge of one polarity, best pair ≥ 130° apart, preferring directions close
+    to the previous estimate. Works on clear frames (video-08 standing), still locks onto arms or
+    branches sometimes; drawn as a dashed line. A Hough search for straight lines left/right of
+    the athlete was tried first and found brick joints and branches instead.
 - **Privacy (decide before the app uses it):** MediaPipe Tasks sends usage statistics (task type,
   timings; no images) to `https://odml.pa.googleapis.com/v1/log` and has no switch to turn that off.
 - Model files: `.task` from `./mediapipe/`, else the same model as base64 JSON

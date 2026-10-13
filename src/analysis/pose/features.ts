@@ -53,6 +53,7 @@ export function poseFeatures(f: PoseFrame): PoseFeatures {
     scale = Math.hypot(dx, dy);
   }
   const feet = mid(point(f, "leftAnkle"), point(f, "rightAnkle"));
+  const legSpan = hips && feet ? Math.hypot(feet[0] - hips[0], feet[1] - hips[1]) : NaN;
   const wrists = mid(point(f, "leftWrist"), point(f, "rightWrist"));
   return {
     time: f.time,
@@ -62,6 +63,7 @@ export function poseFeatures(f: PoseFrame): PoseFeatures {
     hip,
     tilt,
     scale,
+    legSpan,
     feetY: feet ? feet[1] : NaN,
     wristsY: wrists ? wrists[1] : NaN,
     hipsY: hips ? hips[1] : NaN,
@@ -83,4 +85,23 @@ export function poseBox(f: PoseFrame): [number, number, number, number] | null {
     y1 = Math.max(y1, f.points[i + 1]);
   }
   return x0 <= x1 ? [x0, y0, x1, y1] : null;
+}
+
+/**
+ * Hip-to-feet distance with straight legs, as the reference for legExtension: the median leg span
+ * of samples with both knees nearly straight, else a high percentile of all spans.
+ */
+export function legReference(features: PoseFeatures[], straightKnee = 165): number {
+  const straight = features
+    .filter((f) => f.kneeLeft >= straightKnee && f.kneeRight >= straightKnee && Number.isFinite(f.legSpan))
+    .map((f) => f.legSpan)
+    .sort((a, b) => a - b);
+  if (straight.length >= 5) return straight[straight.length >> 1];
+  const all = features.map((f) => f.legSpan).filter(Number.isFinite).sort((a, b) => a - b);
+  return all.length ? all[Math.floor(all.length * 0.9)] : NaN;
+}
+
+/** Hip-to-feet distance in % of the straight-leg reference (100 = straight legs). */
+export function legExtension(f: PoseFeatures, reference: number): number {
+  return Number.isFinite(f.legSpan) && reference > 0 ? (f.legSpan / reference) * 100 : NaN;
 }

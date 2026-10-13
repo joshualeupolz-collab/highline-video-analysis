@@ -131,5 +131,27 @@ The app stores "one video + a list of cut points" and has a cutting module witho
   pick when there is sideways motion. The measured point is the centroid of all residual motion
   (body + arms + line) plus camera tilt, not a specific body part; the owner would prefer the line
   contact (feet, or hands when hanging) – that needs pose detection (approach B).
-- **Next:** hand-mark the test videos, run `npm run evaluate`, tune; then approach B (pose) for the
-  hard cases and the "predict t0 + n·T and refine" step.
+- **Approach B implemented (2026-10-13)** in `src/analysis/pose/`, MediaPipe Pose Landmarker
+  (`@mediapipe/tasks-vision` 1.0.1, "full" model, IMAGE mode, loaded lazily):
+  - Runs on a 256 px square crop around the athlete: from the previous pose (padding 1.8×), else from
+    the motion focus of approach A, else the whole frame. Two attempts per sample at most.
+  - Second pass over the video after approach A, ~8 pose samples per video second; playback speed
+    adapts to the model's speed. Wasm + model (~20 MB) come from `./mediapipe/` (copied/downloaded
+    by `npm run assets`) or the CDNs.
+  - Output per sample: 17 keypoints (nose, shoulders, elbows, wrists, hips, knees, ankles, heels,
+    toes) in frame-width units with visibility (`PoseTrack`). Derived: knee/hip angles, torso tilt,
+    camera-corrected feet height (`features.ts`, `camera.ts`), per-bounce profile (`profile.ts`:
+    knee at the BDC, smallest knee/hip angle, max tilt, unwrapped rotation, time upside down, arms up).
+  - Test page: skeleton overlay, pose chart (knee / tilt / feet), "Body per bounce" table, trick
+    name per bounce saved in `.bdc.json` as `tricks: [{start, end, name}]` – training labels for
+    later trick recognition.
+  - **Finding:** in the browser, approach A alone is already within ~0.1 s of the hand marks
+    (mean abs error 0.11 / 0.13 / 0.10 s on videos 01 / 04 / 05) – about the precision of the hand
+    marks themselves. Moving the BDC to the lowest-feet plateau made it worse (0.21 s on video-01);
+    moving it to the moment the knees straighten (the owner marks exactly that in video-01) was
+    equal, not better. So `refine.mode` defaults to "off": the pose only annotates the BDC (knee
+    angle). Modes "knee" and "feet" stay for experiments.
+  - Speed (headless desktop Chromium, CPU delegate): ~1.5 s of analysis per second of video with
+    pose. Phones use the GPU delegate; not measured yet.
+- **Next:** measure speed on phones; collect trick names per bounce; use pose to drop false BDCs
+  (needs more marked videos with tricks at the top); line detection for tiny athletes.

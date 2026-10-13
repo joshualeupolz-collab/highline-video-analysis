@@ -15,6 +15,10 @@ npm run dev        # open the printed URL (also works from a phone in the same W
 npm run build      # dist/ plus a single self-contained dist/bdc-test-bench.html
 ```
 
+`npm run dev` / `npm run build` first run `npm run assets`, which copies the MediaPipe wasm files and
+downloads the pose models (~15 MB) into `public/mediapipe/` (not in git). Without them the page
+falls back to the jsDelivr and Google model CDNs.
+
 1. **Open videos / JSON…** – pick one or more videos (and their `.bdc.json` files, if any).
    Nothing is uploaded; everything stays in the browser.
 2. **Run automatic analysis** – orange triangles are the suggested BDCs, the blue curve is the
@@ -25,6 +29,12 @@ npm run build      # dist/ plus a single self-contained dist/bdc-test-bench.html
 4. **Save my marks** downloads `video-XX.bdc.json`; put it into `videos/`.
    The table at the bottom shows found / missed / extra points (±0.3 s).
 
+5. With **Body pose** (on by default) the analysis also runs MediaPipe Pose: the skeleton is drawn on
+   the video, the chart under the timeline shows knee angle, body tilt and feet height, and the
+   table **Body per bounce** sums up each bounce (knee at the BDC, tuck, pike, rotation, time upside
+   down, arms up). Type the trick name for the current bounce into **Trick of this bounce**; names are
+   saved with the marks.
+
 Marks are also kept in the browser's local storage until you clear them. **Show my marks as text**
 gives the same JSON for copying (e.g. into a chat).
 
@@ -34,12 +44,21 @@ gives the same JSON for copying (e.g. into a chat).
 npm test                               # unit tests (Vitest)
 npm run analyze -- videos/video-05.mp4 # writes videos/video-05.auto.json (needs ffmpeg)
 npm run evaluate                       # compares all videos/*.bdc.json with the automatic result
+
+# The same analysis as the test page (motion + pose) in headless Chromium, then evaluate it:
+npm run build
+node scripts/browser-eval.mjs webm/ out/ full   # needs Playwright; WebM input (see the script)
+npm run evaluate -- --from out/
 ```
 
 ## Code
 
-- `src/analysis/` – the analysis module (no UI, no dependencies). `analyze(file)` is the browser
-  entry; `core.ts` exports the DOM-free parts.
+- `src/analysis/` – the analysis module (no UI). `analyze(file, { pose })` is the browser entry;
+  `core.ts` exports the DOM-free parts. Only dependency: `@mediapipe/tasks-vision`, loaded lazily
+  when the pose is asked for.
+- `src/analysis/pose/` – pose tracking (`landmarker.ts`, crops in `roi.ts`), body measures
+  (`features.ts`), camera correction (`camera.ts`), BDC refinement (`refine.ts`) and per-bounce
+  profiles (`profile.ts`).
 - `src/testpage/` – the test page.
 - `scripts/` – Node helpers (ffmpeg frame decoding, batch analysis, evaluation, single-file build).
 

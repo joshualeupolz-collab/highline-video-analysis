@@ -1,3 +1,5 @@
+import type { PoseSignals, PoseTrack } from "./pose/types";
+
 /** A downscaled grayscale video frame (values 0..255). */
 export interface GrayFrame {
   /** Row-major luminance, length = width * height. */
@@ -58,6 +60,12 @@ export interface CutPoint {
   time: number;
   /** 0..1, how confident the detector is. */
   confidence: number;
+  /** Time found by the motion analysis, before the pose refinement moved it. */
+  motionTime?: number;
+  /** "motion" = from camera/foreground motion only, "pose" = moved to the lowest feet by the pose. */
+  method?: "pose" | "motion";
+  /** Mean knee angle at the cut point (degrees, 180 = straight), NaN if unknown. */
+  knee?: number;
 }
 
 export interface AnalysisResult {
@@ -65,4 +73,9 @@ export interface AnalysisResult {
   /** Estimated bounce period in seconds (NaN if none found). */
   period: number;
   signals: Signals;
+  /** Body pose, when the pose analysis ran. */
+  pose?: {
+    track: PoseTrack;
+    signals: PoseSignals;
+  };
 }

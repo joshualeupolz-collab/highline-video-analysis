@@ -1,7 +1,10 @@
 import { analyze } from "../analysis/analyze";
 import { evaluateCutPoints } from "../analysis/evaluate";
+import { poseFeatures } from "../analysis/pose/features";
+import { bounceProfiles } from "../analysis/pose/profile";
 import type { AnalysisResult } from "../analysis/types";
-import { drawTimeline, type TimelineView } from "./timeline";
+import { drawSkeleton, poseAt } from "./skeleton";
+import { drawPoseChart, drawTimeline, type TimelineView } from "./timeline";
 
 /** Hand-marked ground truth, stored as `<video>.bdc.json`. */
 interface ManualMarks {
@@ -12,7 +15,15 @@ interface ManualMarks {
   bdc: number[];
   /** Hard cuts (changes of shot) in seconds. */
   cuts: number[];
+  /** Trick names per bounce: the bounce from BDC `start` to the next BDC `end`. */
+  tricks: Trick[];
   savedAt?: string;
+}
+
+interface Trick {
+  start: number;
+  end: number;
+  name: string;
 }
 
 interface Entry {
@@ -29,6 +40,9 @@ const list = $<HTMLSelectElement>("videoList");
 const overview = $<HTMLCanvasElement>("overview");
 const detail = $<HTMLCanvasElement>("detail");
 const statusEl = $("status");
+const overlay = $<HTMLCanvasElement>("overlay");
+const poseChart = $<HTMLCanvasElement>("poseChart");
+const trickInput = $<HTMLInputElement>("trick");
 const blind = $<HTMLInputElement>("blind");
 
 const entries: Entry[] = [];
@@ -77,6 +91,9 @@ function normaliseMarks(raw: Partial<ManualMarks>, video: string): ManualMarks {
     duration: raw.duration ?? 0,
     bdc: nums(raw.bdc).sort((a, b) => a - b),
     cuts: nums(raw.cuts).sort((a, b) => a - b),
+    tricks: Array.isArray(raw.tricks)
+      ? raw.tricks.filter((t) => t && typeof t.start === "number" && typeof t.name === "string")
+      : [],
   };
 }
 
@@ -105,7 +122,7 @@ async function openFiles(files: FileList | File[]) {
     const e: Entry = {
       file: f,
       url: URL.createObjectURL(f),
-      marks: restore(f) ?? normaliseMarks({}, f.name),
+      marks: normaliseMarks(restore(f) ?? {}, f.name),
       auto: null,
     };
     const pending = pendingJson.get(baseName(f.name));
@@ -236,7 +253,74 @@ function refresh() {
   };
   drawTimeline(overview, a, data);
   drawTimeline(detail, b, data);
+  renderPose(a);
+  renderTrick();
   renderStats();
+}
+
+function renderPose(view: TimelineView) {
+  const pose = current?.auto?.pose;
+  poseChart.hidden = !pose;
+  $("poseLegend").hidden = !pose;
+  const frame = pose ? poseAt(pose.track, time()) : null;
+  drawSkeleton(overlay, video, ($("skeleton") as HTMLInputElement).checked ? frame : null);
+  const info = $("poseInfo");
+  if (!pose) {
+    info.textContent = "";
+    return;
+  }
+  drawPoseChart(poseChart, view, pose.signals, {
+    manual: current!.marks.bdc,
+    auto: showAuto() ? current!.auto!.cutPoints.map((c) => c.time) : [],
+    playhead: time(),
+  });
+  if (!frame) {
+    info.textContent = "no pose here";
+    return;
+  }
+  const f = poseFeatures(frame);
+  const deg = (v: number) => (Number.isFinite(v) ? `${Math.round(v)}°` : "–");
+  info.textContent =
+    `knee L ${deg(f.kneeLeft)} R ${deg(f.kneeRight)} · hip ${deg(f.hip)} · tilt ${deg(f.tilt)}` +
+    `${f.upright ? "" : " (not upright)"} · found by ${frame.source}`;
+}
+
+/** The bounce around time t: from the last BDC at or before t to the next one. */
+function bounceAt(t: number): { start: number; end: number } | null {
+  const marks = current?.marks.bdc.length ? current.marks.bdc : (current?.auto?.cutPoints.map((c) => c.time) ?? []);
+  const start = [...marks].reverse().find((x) => x <= t + 0.01);
+  const end = marks.find((x) => x > t + 0.01);
+  if (start === undefined || end === undefined) return null;
+  return { start, end };
+}
+
+function renderTrick() {
+  if (!current) return;
+  const b = bounceAt(time());
+  trickInput.disabled = !b;
+  $("trickRange").textContent = b ? `${b.start.toFixed(2)}–${b.end.toFixed(2)} s` : "mark BDCs first";
+  const t = b ? current.marks.tricks.find((x) => Math.abs(x.start - b.start) < 0.15) : undefined;
+  if (document.activeElement !== trickInput) trickInput.value = t?.name ?? "";
+  const names = new Set(entries.flatMap((e) => e.marks.tricks.map((x) => x.name)));
+  const dl = $("trickNames");
+  if (dl.childElementCount !== names.size) {
+    dl.innerHTML = "";
+    for (const n of names) {
+      const o = document.createElement("option");
+      o.value = n;
+      dl.append(o);
+    }
+  }
+}
+
+function setTrick(name: string) {
+  if (!current) return;
+  const b = bounceAt(time());
+  if (!b) return;
+  current.marks.tricks = current.marks.tricks.filter((x) => Math.abs(x.start - b.start) >= 0.15);
+  if (name.trim()) current.marks.tricks.push({ start: b.start, end: b.end, name: name.trim() });
+  current.marks.tricks.sort((x, y) => x.start - y.start);
+  changed();
 }
 
 function renderStats() {
@@ -269,7 +353,34 @@ function renderStats() {
       <tr><th>Extra</th><td class="mono">${ev.extra.map((x) => x.toFixed(2)).join(", ") || "–"}</td></tr>
     </table>`);
   }
+  const pose = auto?.pose;
+  if (pose) {
+    const marks = current.marks.bdc.length >= 2 ? current.marks.bdc : auto.cutPoints.map((c) => c.time);
+    const rows = bounceProfiles(pose.track, marks);
+    const deg = (v: number) => (Number.isFinite(v) ? `${Math.round(v)}°` : "–");
+    const name = (start: number) => current!.marks.tricks.find((t) => Math.abs(t.start - start) < 0.15)?.name ?? "";
+    parts.push(`<h3>Body per bounce</h3>
+      <p class="hint">Between ${current.marks.bdc.length >= 2 ? "your" : "the automatic"} BDC marks. Rotation: 360° = one
+        full turn of the upper body in the picture. Click a row to jump there.</p>
+      <div class="scroll"><table class="bounces">
+      <tr><th>from</th><th>trick</th><th>knee at BDC</th><th>min knee</th><th>min hip</th><th>max tilt</th>
+        <th>rotation</th><th>upside down</th><th>arms up</th><th>pose found</th></tr>
+      ${rows
+        .map(
+          (r) => `<tr data-seek="${r.start}"><td class="mono">${r.start.toFixed(2)} s</td><td>${escapeHtml(name(r.start))}</td>
+        <td>${deg(r.kneeAtStart)}</td><td>${deg(r.kneeMin)}</td><td>${deg(r.hipMin)}</td><td>${deg(r.tiltMax)}</td>
+        <td>${deg(r.rotation)}</td><td>${r.invertedTime.toFixed(1)} s</td>
+        <td>${Number.isFinite(r.armsUp) ? Math.round(r.armsUp * 100) + " %" : "–"}</td>
+        <td>${Math.round(r.coverage * 100)} %</td></tr>`,
+        )
+        .join("")}
+      </table></div>`);
+  }
   el.innerHTML = parts.join("");
+}
+
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 // ---------- timeline interaction ----------
@@ -332,14 +443,24 @@ async function runAnalysis() {
   btn.textContent = "Stop analysis";
   const started = performance.now();
   try {
+    const usePose = ($("usePose") as HTMLInputElement).checked;
     entry.auto = await analyze(entry.file, {
-      frames: {
-        playbackRate: Number(($("analysisRate") as HTMLSelectElement).value),
-        signal: ctl.signal,
-        onProgress: (f) => (statusEl.textContent = `analysing… ${Math.round(f * 100)} %`),
-      },
+      frames: { playbackRate: Number(($("analysisRate") as HTMLSelectElement).value) },
+      pose: usePose
+        ? {
+            model: ($("poseModel") as HTMLSelectElement).value as "lite" | "full",
+            // ?cpu forces the CPU delegate (headless test browsers have no real GPU)
+            delegate: new URLSearchParams(location.search).has("cpu") ? "CPU" : "GPU",
+          }
+        : false,
+      signal: ctl.signal,
+      onProgress: (phase, f) =>
+        (statusEl.textContent = `${phase === "motion" ? "motion" : "body pose"}… ${Math.round(f * 100)} %`),
     });
-    statusEl.textContent = `done in ${((performance.now() - started) / 1000).toFixed(1)} s`;
+    const pose = entry.auto.pose;
+    statusEl.textContent =
+      `done in ${((performance.now() - started) / 1000).toFixed(1)} s` +
+      (pose ? ` · pose found in ${pose.track.frames.length} of ${pose.track.sampled} frames` : "");
   } catch (err) {
     statusEl.textContent = (err as Error).name === "AbortError" ? "stopped" : `error: ${err}`;
   } finally {
@@ -429,11 +550,14 @@ const actions: Record<string, () => void> = {
     if (!current || !confirm("Delete all your marks for this video?")) return;
     current.marks.bdc = [];
     current.marks.cuts = [];
+    current.marks.tricks = [];
     changed();
   },
 };
 
 document.addEventListener("click", (ev) => {
+  const row = (ev.target as HTMLElement).closest<HTMLElement>("[data-seek]");
+  if (row) seek(Number(row.dataset.seek) + 0.05);
   const act = (ev.target as HTMLElement).closest<HTMLElement>("[data-act]")?.dataset.act;
   if (act) actions[act]?.();
 });
@@ -491,9 +615,15 @@ video.addEventListener("ratechange", () => {
   // The analysis never touches the visible player, but keep the selector in sync anyway.
   ($("rate") as HTMLSelectElement).value = String(video.playbackRate);
 });
+trickInput.addEventListener("change", () => setTrick(trickInput.value));
+($("skeleton") as HTMLInputElement).addEventListener("change", refresh);
 attachTimeline(overview, 0);
 attachTimeline(detail, 1);
 new ResizeObserver(refresh).observe(overview);
+new ResizeObserver(refresh).observe(video);
+
+// Hook for automated tests (scripts/browser-eval.mjs).
+(window as unknown as { bdcBench: unknown }).bdcBench = { analyze };
 
 (function tick() {
   if (current && !video.paused) refresh();

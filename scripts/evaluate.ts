@@ -2,9 +2,11 @@
  * Compares automatic cut points with hand-marked ones for every `videos/*.bdc.json`
  * that has a matching video file next to it.
  *
- *   npm run evaluate            # all marked videos
+ *   npm run evaluate            # all marked videos (motion analysis via ffmpeg)
  *   npm run evaluate -- 0.5     # with a different tolerance in seconds (default 0.3)
+ *   npm run evaluate -- --from out/   # use <name>.auto.json from scripts/browser-eval.mjs (motion + pose)
  *   DETECT_OPTS='{"plateauFraction":0}' npm run evaluate   # try other detector settings
+ *   (also MOTION_OPTS='{...}' and WIDTH=320)
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,24 +15,19 @@ import type { FrameMotion } from "../src/analysis/core";
 import { grayFrames } from "./frames-node";
 
 const dir = "videos";
-const tolerance = Number(process.argv[2] ?? 0.3);
+const args = process.argv.slice(2);
+const fromIndex = args.indexOf("--from");
+const from = fromIndex >= 0 ? args.splice(fromIndex, 2)[1] : null;
+const tolerance = Number(args[0] ?? 0.3);
 const marked = readdirSync(dir).filter((f) => f.endsWith(".bdc.json")).sort();
 if (!marked.length) {
   console.log(`No *.bdc.json files in ${dir}/ yet. Mark videos on the test page and save them there.`);
   process.exit(0);
 }
 
-let truthTotal = 0;
-let matchTotal = 0;
-let predTotal = 0;
-for (const f of marked) {
-  const marks = JSON.parse(readFileSync(join(dir, f), "utf8"));
-  const base = f.replace(/\.bdc\.json$/, "");
+async function analyzeWithFfmpeg(base: string) {
   const video = [".mp4", ".webm", ".mov"].map((e) => join(dir, base + e)).find(existsSync);
-  if (!video) {
-    console.log(`${f}: no video found, skipped`);
-    continue;
-  }
+  if (!video) return null;
   const tracker = new MotionTracker(JSON.parse(process.env.MOTION_OPTS ?? "{}"));
   const motions: FrameMotion[] = [];
   let duration = 0;
@@ -39,7 +36,24 @@ for (const f of marked) {
     const m = tracker.push(frame);
     if (m) motions.push(m);
   }
-  const result = detectCutPoints(motions, duration, JSON.parse(process.env.DETECT_OPTS ?? "{}"));
+  return detectCutPoints(motions, duration, JSON.parse(process.env.DETECT_OPTS ?? "{}"));
+}
+
+let truthTotal = 0;
+let matchTotal = 0;
+let predTotal = 0;
+for (const f of marked) {
+  const marks = JSON.parse(readFileSync(join(dir, f), "utf8"));
+  const base = f.replace(/\.bdc\.json$/, "");
+  let result: { cutPoints: { time: number }[] } | null;
+  if (from) {
+    const file = join(from, `${base}.auto.json`);
+    result = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+  } else result = await analyzeWithFfmpeg(base);
+  if (!result) {
+    console.log(`${base}: no ${from ? "analysis file" : "video"} found, skipped`);
+    continue;
+  }
   const ev = evaluateCutPoints(marks.bdc, result.cutPoints.map((c) => c.time), tolerance);
   truthTotal += marks.bdc.length;
   matchTotal += ev.matches.length;

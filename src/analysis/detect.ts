@@ -7,6 +7,7 @@ import {
   movingAverage,
   resampleUniform,
   std,
+  type Peak,
 } from "./signal";
 import type { AnalysisResult, CutPoint, FrameMotion, Signals } from "./types";
 
@@ -26,6 +27,13 @@ export interface DetectOptions {
   minSpacing: number;
   /** Shots shorter than this (seconds) are ignored. */
   minShotSeconds: number;
+  /**
+   * The bottom is a plateau rather than a sharp peak. The cut point is the centre of the part of the
+   * plateau within this fraction of the peak's prominence below the peak (0 = the peak itself).
+   */
+  plateauFraction: number;
+  /** Peaks closer than this (seconds) to a hard cut in the video are dropped. */
+  edgeSeconds: number;
 }
 
 export const defaultDetectOptions: DetectOptions = {
@@ -35,12 +43,17 @@ export const defaultDetectOptions: DetectOptions = {
   minPeriod: 1.8,
   maxPeriod: 5.5,
   minProminence: 0.5,
-  minSpacing: 0.55,
+  minSpacing: 0.65,
   minShotSeconds: 1.5,
+  plateauFraction: 0.3,
+  edgeSeconds: 0.4,
 };
 
 interface Shot {
   start: number;
+  /** Whether the shot starts / ends at a hard cut (not at the start / end of the video). */
+  cutBefore: boolean;
+  cutAfter: boolean;
   /** Uniform grid index of the first sample. */
   offset: number;
   height: number[];
@@ -95,7 +108,7 @@ export function detectCutPoints(
     const smooth = gaussianSmooth(uni, o.smoothSeconds * rate);
     const trend = movingAverage(smooth, Math.round(o.detrendSeconds * rate));
     const h = smooth.map((v, i) => v - trend[i]);
-    shots.push({ start: a, offset: first, height: h });
+    shots.push({ start: a, cutBefore: s > 0, cutAfter: s + 2 < bounds.length, offset: first, height: h });
     h.forEach((v, i) => (height[first + i] = v));
   }
 
@@ -133,16 +146,37 @@ function shotPeaks(shot: Shot, period: number, o: DetectOptions): CutPoint[] {
   const sd = std(h) || 1;
   const T = Number.isFinite(period) ? period : (o.minPeriod + o.maxPeriod) / 2;
   const minDist = o.minSpacing * T * o.rate;
+  const edge = o.edgeSeconds * o.rate;
   const candidates = findPeaks(h)
     .filter((p) => p.prominence >= o.minProminence * sd)
+    .filter((p) => !(shot.cutBefore && p.position < edge) && !(shot.cutAfter && p.position > h.length - 1 - edge))
     .sort((a, b) => b.prominence - a.prominence);
-  const chosen: typeof candidates = [];
-  for (const p of candidates) {
-    if (chosen.every((c) => Math.abs(c.position - p.position) >= minDist)) chosen.push(p);
+  const centred = candidates.map((p) => ({ ...p, centre: plateauCentre(h, p, o.plateauFraction, (T / 2) * o.rate) }));
+  const chosen: typeof centred = [];
+  for (const p of centred) {
+    if (chosen.every((c) => Math.abs(c.centre - p.centre) >= minDist)) chosen.push(p);
   }
   const maxProm = Math.max(...chosen.map((c) => c.prominence), 1e-9);
   return chosen.map((p) => ({
-    time: (shot.offset + p.position) / o.rate,
+    time: (shot.offset + p.centre) / o.rate,
     confidence: Math.min(1, p.prominence / Math.max(maxProm * 0.6, 2 * sd)),
   }));
+}
+
+/** Weighted centre of the samples around a peak that lie within `fraction` of its prominence. */
+function plateauCentre(h: number[], p: Peak, fraction: number, maxReach: number): number {
+  if (fraction <= 0) return p.position;
+  const level = p.value - fraction * p.prominence;
+  let a = p.index;
+  let b = p.index;
+  while (a > 0 && p.index - a < maxReach && h[a - 1] >= level) a--;
+  while (b < h.length - 1 && b - p.index < maxReach && h[b + 1] >= level) b++;
+  let sum = 0;
+  let weighted = 0;
+  for (let i = a; i <= b; i++) {
+    const w = h[i] - level;
+    sum += w;
+    weighted += w * i;
+  }
+  return sum > 0 ? weighted / sum : p.position;
 }

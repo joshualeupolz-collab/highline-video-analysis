@@ -108,5 +108,14 @@ The app stores "one video + a list of cut points" and has a cutting module witho
   correlation then partly tracks the athlete), fixed camera with a small athlete (video-04), standing
   pauses without bounces. Browser sampling timestamps vary a little between runs, so results can
   differ by a point or two.
+- **Results so far** (`npm run evaluate`): video-01 (hardest clip, tight telephoto, one cut)
+  13/15 within ±0.3 s, 15/15 within ±0.5 s. Tuning from it: the cut point is the centre of the
+  bottom plateau (`plateauFraction` 0.3), not its highest sample, which was ~0.4 s late;
+  points closer than 0.65 periods are merged; no points within 0.4 s of a hard cut. Only one video
+  is hand-marked so far, so these defaults may still be overfitted.
+- **Owner feedback (2026-10-13):** ±0.3 s is strict; the owner also finds the exact BDC hard to
+  pick when there is sideways motion. The measured point is the centroid of all residual motion
+  (body + arms + line) plus camera tilt, not a specific body part; the owner would prefer the line
+  contact (feet, or hands when hanging) – that needs pose detection (approach B).
 - **Next:** hand-mark the test videos, run `npm run evaluate`, tune; then approach B (pose) for the
   hard cases and the "predict t0 + n·T and refine" step.

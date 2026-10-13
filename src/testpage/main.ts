@@ -143,6 +143,7 @@ function renderList() {
 
 function select(e: Entry) {
   analyzing?.abort();
+  $("textBox").hidden = true;
   current = e;
   video.src = e.url;
   video.playbackRate = Number(($("rate") as HTMLSelectElement).value);
@@ -406,6 +407,23 @@ const actions: Record<string, () => void> = {
     if (current.marks.bdc.length && !confirm("Replace your BDC marks with the automatic ones?")) return;
     current.marks.bdc = current.auto.cutPoints.map((c) => Number(c.time.toFixed(3)));
     changed();
+  },
+  text: () => {
+    if (!current) return;
+    const m = { ...current.marks, duration: video.duration, savedAt: new Date().toISOString() };
+    $("textName").textContent = `videos/${baseName(current.file.name)}.bdc.json`;
+    ($("marksText") as HTMLTextAreaElement).value = JSON.stringify(m);
+    $("copyStatus").textContent = "";
+    $("textBox").hidden = false;
+  },
+  copy: () => {
+    const area = $("marksText") as HTMLTextAreaElement;
+    area.select();
+    const done = () => ($("copyStatus").textContent = "copied");
+    const manual = () => ($("copyStatus").textContent = "select the text and copy it by hand");
+    if (navigator.clipboard) navigator.clipboard.writeText(area.value).then(done, () => (document.execCommand("copy") ? done() : manual()));
+    else if (document.execCommand("copy")) done();
+    else manual();
   },
   clear: () => {
     if (!current || !confirm("Delete all your marks for this video?")) return;

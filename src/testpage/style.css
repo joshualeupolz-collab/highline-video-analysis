@@ -93,3 +93,12 @@ video { max-width: 100%; max-height: 55vh; display: block; }
 #stats .bad { color: var(--cut); }
 #stats .ok { color: var(--good); }
 code { font-size: 0.9em; }
+textarea {
+  width: 100%;
+  font: 12px/1.4 ui-monospace, monospace;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+}

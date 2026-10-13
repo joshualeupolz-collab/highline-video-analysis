@@ -5,6 +5,10 @@ in the browser. Background and requirements: [CLAUDE.md](CLAUDE.md).
 
 ## Test page
 
+Online: <https://joshualeupolz-collab.github.io/highline-video-analysis/> (built from `main` by
+`.github/workflows/pages.yml`; needs Settings → Pages → Source: "GitHub Actions" once).
+
+
 ```sh
 npm install
 npm run dev        # open the printed URL (also works from a phone in the same Wi-Fi)
@@ -21,7 +25,8 @@ npm run build      # dist/ plus a single self-contained dist/bdc-test-bench.html
 4. **Save my marks** downloads `video-XX.bdc.json`; put it into `videos/`.
    The table at the bottom shows found / missed / extra points (±0.3 s).
 
-Marks are also kept in the browser's local storage until you clear them.
+Marks are also kept in the browser's local storage until you clear them. **Show my marks as text**
+gives the same JSON for copying (e.g. into a chat).
 
 ## Command line
 

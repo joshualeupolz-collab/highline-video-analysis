@@ -75,7 +75,15 @@
         <button data-act="save">Save my marks (.bdc.json)</button>
         <button data-act="save-auto">Save analysis (.auto.json)</button>
         <button data-act="adopt">Copy automatic points to my marks</button>
+        <button data-act="text">Show my marks as text</button>
         <button data-act="clear" class="danger">Clear my marks</button>
+      </div>
+
+      <div id="textBox" hidden>
+        <p class="hint">Copy this text and paste it into the chat with Claude (or save it as
+          <code id="textName"></code>).</p>
+        <textarea id="marksText" rows="6" readonly></textarea>
+        <div class="row"><button data-act="copy">Copy</button><span id="copyStatus" class="hint"></span></div>
       </div>
 
       <section id="stats"></section>

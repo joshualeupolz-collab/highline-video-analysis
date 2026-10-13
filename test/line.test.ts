@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectLine, type GrayImage } from "../src/analysis/pose/line";
+import { detectLine, trackLine, type GrayImage } from "../src/analysis/pose/line";
 
 /** Noisy gray image with a dark 2 px line kinked at (cx, cy): one half at angle a1, the other at a2 (degrees). */
 function image(cx: number, cy: number, a1: number, a2: number): GrayImage {
@@ -35,5 +35,30 @@ describe("detectLine", () => {
   it("reports nothing without a line", () => {
     const img = image(-1000, -1000, 0, 180);
     expect(detectLine(img, [{ via: "feet", point: [0.5, 0.6] }], 0.1)).toBeNull();
+  });
+});
+
+describe("trackLine", () => {
+  const scores = (peaks: number[]) => {
+    const s = new Array(90).fill(1);
+    for (const p of peaks) s[Math.round(p / 4) % 90] = 20;
+    return s;
+  };
+
+  it("keeps a steady line and ignores a one-frame jump to the hands", () => {
+    const obs = Array.from({ length: 20 }, (_, i) => ({
+      time: i / 15,
+      torso: 0.1,
+      contacts: [
+        { via: "feet" as const, point: [0.5, 0.6] as [number, number], scores: i === 10 ? scores([]) : scores([340, 200]) },
+        { via: "hands" as const, point: [0.5, 0.3] as [number, number], scores: i === 10 ? scores([0, 180]) : scores([]) },
+      ],
+    }));
+    const lines = trackLine(obs);
+    expect(lines[5]?.via).toBe("feet");
+    expect([...lines[5]!.angles].sort((a, b) => a - b)).toEqual([200, 340]);
+    // Frame 10: no line seen at the feet; the track does not jump to the hands
+    expect(lines[10] === null || lines[10].via === "feet").toBe(true);
+    expect(lines[15]?.via).toBe("feet");
   });
 });

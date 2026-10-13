@@ -65,6 +65,8 @@ export function drawSkeleton(
   const style = getComputedStyle(document.documentElement);
   const colors = ["#ffffff", style.getPropertyValue("--left").trim() || "#0ea5e9", style.getPropertyValue("--right").trim() || "#f43f5e"];
   ctx.lineCap = "round";
+  // Poses filled in between detections are drawn fainter
+  ctx.globalAlpha = pose.source === "interpolated" ? 0.55 : 1;
   for (const [a, b, side] of show.skeleton ? BONES : []) {
     const pa = px(a);
     const pb = px(b);
@@ -100,6 +102,7 @@ export function drawSkeleton(
     }
     ctx.setLineDash([]);
   }
+  ctx.globalAlpha = 1;
   const head = px(i.nose);
   if (head && show.skeleton) {
     ctx.fillStyle = "#ffffff";

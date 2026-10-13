@@ -51,8 +51,8 @@ export const MEDIAPIPE_INDEX: Record<KeypointName, number> = {
 export interface PoseFrame {
   time: number;
   points: number[];
-  /** Where the detection came from: crop around the last pose, crop from the motion focus, whole frame. */
-  source: "track" | "motion" | "full";
+  /** Where the detection came from: crop around the predicted pose, crop from the motion focus, whole frame, or filled in between detections. */
+  source: "track" | "motion" | "full" | "interpolated";
   /** Experimental: the tensioned line at this moment, if it was found. */
   line?: LineEstimate;
 }

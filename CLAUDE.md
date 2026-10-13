@@ -182,6 +182,26 @@ The app stores "one video + a list of cut points" and has a cutting module witho
     to the previous estimate. Works on clear frames (video-08 standing), still locks onto arms or
     branches sometimes; drawn as a dashed line. A Hough search for straight lines left/right of
     the athlete was tried first and found brick joints and branches instead.
+- **Round 3 of approach B – prediction and offline tracking (owner feedback: round 2 looked worse;
+  use prediction, continuity, look before and after):**
+  - Plausibility metrics without ground truth (scratch script, see the session): torso flips vs.
+    both neighbours, poses with ≥ 2 bones off by > ×1.6 / < ×0.6 of their median, joints > 0.5
+    torso lengths off the line between their neighbours, line contact switches and direction jumps.
+  - Pose (`track.ts`): during the pass the crop is placed where the body is predicted to be
+    (constant speed and turn rate from the last picks, ≤ 700°/s); a second, upright or wider crop
+    only runs when the first result does not fit the prediction. All candidates (plus left/right
+    swapped versions) go to an offline Viterbi that minimises joint jumps beyond 6 torso lengths/s,
+    turning beyond 500°/s, bone length changes and low visibility; then single-joint outliers are
+    dropped, gaps ≤ 0.6 s are filled by moving the hip centre and *turning* the torso on (limbs keep
+    their shape), and a [1,2,1] smoothing removes jitter. Result on videos 01/05/07/08: torso flips
+    1–10 → 0, joint spikes 27–154 → 0–1 per video; skeletons checked by eye on 05 and 08 incl. the
+    hang and backflip in 08 at 12.6–14.2 s. Time with pose ≈ 2.5–3× video length on headless CPU.
+  - Line (`trackLine` in `line.ts`): ray scores per sample from the feet (and the hands only when
+    the body is not upright), directions along the athlete's own limbs and near-vertical
+    directions (leash, rope to a backup line) masked; offline Viterbi over direction, kink and
+    contact with slow changes, a high cost for switching feet ↔ hands and a V-shape prior.
+    No more direction jumps; still right only about half the time where it is drawn (video-05's
+    wide webbing and brick wall are hard). "Show line" is off by default.
 - **Privacy (decide before the app uses it):** MediaPipe Tasks sends usage statistics (task type,
   timings; no images) to `https://odml.pa.googleapis.com/v1/log` and has no switch to turn that off.
 - Model files: `.task` from `./mediapipe/`, else the same model as base64 JSON

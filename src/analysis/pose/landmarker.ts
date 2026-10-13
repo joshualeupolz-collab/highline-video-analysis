@@ -6,8 +6,9 @@
 import type { FrameMotion } from "../types";
 import { playFrames } from "../videoFrames";
 import { poseFeatures } from "./features";
-import { detectLine, type GrayImage, type LineEstimate } from "./line";
-import { angleDiff, cropFromMotion, cropFromPose, fromCrop, type Crop } from "./roi";
+import { rayScores, trackLine, type GrayImage, type LineObservation } from "./line";
+import { cropFromMotion, cropFromPose, fromCrop, squareCrop, type Crop } from "./roi";
+import { trackPoses, type PoseCandidate, type PoseSample } from "./track";
 import { KEYPOINTS, MEDIAPIPE_INDEX, type PoseFrame, type PoseTrack } from "./types";
 
 export type PoseModel = "lite" | "full" | "heavy";
@@ -27,12 +28,8 @@ export interface PoseOptions {
   minConfidence: number;
   /** Also look for the tensioned line (experimental). */
   line: boolean;
-  /**
-   * Largest plausible torso turn between two samples: `turnRate` degrees per second times the time
-   * between them, plus `turnSlack` degrees. Faster "turns" are the model flipping the skeleton.
-   */
+  /** Fastest turn (degrees per second) assumed when predicting where the body will be. */
   turnRate: number;
-  turnSlack: number;
   /** "GPU" (falls back to CPU if unavailable) or "CPU". GPU is faster on phones; without a real GPU it is very slow. */
   delegate: "GPU" | "CPU";
   onProgress?: (fraction: number) => void;
@@ -56,8 +53,7 @@ export const defaultPoseOptions: PoseOptions = {
   minConfidence: 0.3,
   delegate: "GPU",
   line: true,
-  turnRate: 400,
-  turnSlack: 40,
+  turnRate: 700,
 };
 
 async function firstReachable(urls: string[], probe: (u: string) => string): Promise<string> {
@@ -120,10 +116,8 @@ export async function trackPose(
   canvas.width = o.inputSize;
   canvas.height = o.inputSize;
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-  const frames: PoseFrame[] = [];
-  const missed: number[] = [];
-  let sampled = 0;
-  let last: PoseFrame | null = null;
+  const samples: PoseSample[] = [];
+  const lineObs: LineObservation[] = [];
   let mi = 0;
 
   const run = (crop: Crop | null): number[] | null => {
@@ -151,7 +145,6 @@ export async function trackPose(
     }
     return points;
   };
-  const tiltOf = (points: number[], time: number) => poseFeatures({ time, points, source: "track" }).tilt;
 
   // Gray copy of the frame for the line search (480 px wide)
   const lineW = Math.min(480, W);
@@ -160,95 +153,167 @@ export async function trackPose(
   lineCanvas.width = lineW;
   lineCanvas.height = lineH;
   const lineCtx = lineCanvas.getContext("2d", { willReadFrequently: true })!;
-  let lastLine: { time: number; line: LineEstimate } | null = null;
-  const findLine = (frame: PoseFrame): LineEstimate | null => {
-    const f = poseFeatures(frame);
-    if (!Number.isFinite(f.scale)) return null;
+  const observeLine = (time: number, points: number[]) => {
+    const f = poseFeatures({ time, points, source: "track" });
+    if (!Number.isFinite(f.scale)) return;
     lineCtx.drawImage(video, 0, 0, lineW, lineH);
     const rgba = lineCtx.getImageData(0, 0, lineW, lineH).data;
     const gray: GrayImage = { data: new Float32Array(lineW * lineH), width: lineW, height: lineH };
     for (let i = 0, j = 0; i < gray.data.length; i++, j += 4) {
       gray.data[i] = 0.299 * rgba[j] + 0.587 * rgba[j + 1] + 0.114 * rgba[j + 2];
     }
-    const pts = (names: (typeof KEYPOINTS)[number][]) => {
-      const v = names
-        .map((n) => KEYPOINTS.indexOf(n) * 3)
-        .filter((i) => frame.points[i + 2] >= 0.3)
-        .map((i) => [frame.points[i], frame.points[i + 1]] as [number, number]);
-      return v.length ? ([v.reduce((a, p) => a + p[0], 0) / v.length, v.reduce((a, p) => a + p[1], 0) / v.length] as [number, number]) : null;
+    const mean = (names: (typeof KEYPOINTS)[number][]) => {
+      const v = names.map((n) => KEYPOINTS.indexOf(n) * 3).filter((i) => points[i + 2] >= 0.3);
+      return v.length
+        ? ([v.reduce((a, i) => a + points[i], 0) / v.length, v.reduce((a, i) => a + points[i + 1], 0) / v.length] as [number, number])
+        : null;
     };
-    const candidates: { via: LineEstimate["via"]; point: [number, number] }[] = [];
-    const feet = pts(["leftAnkle", "rightAnkle", "leftHeel", "rightHeel", "leftToe", "rightToe"]);
-    const hands = pts(["leftWrist", "rightWrist"]);
-    if (feet && Math.abs(f.tilt) < 70) candidates.push({ via: "feet", point: feet });
-    if (hands) candidates.push({ via: "hands", point: hands });
-    const prev = lastLine && frame.time - lastLine.time < 0.4 ? lastLine.line : null;
-    const line = detectLine(gray, candidates, f.scale, prev);
-    if (line) lastLine = { time: frame.time, line };
-    return line;
+    const contacts: LineObservation["contacts"] = [];
+    const feet = mean(["leftAnkle", "rightAnkle", "leftHeel", "rightHeel", "leftToe", "rightToe"]);
+    const hands = mean(["leftWrist", "rightWrist"]);
+    // Directions that cannot be the line: along the athlete's own limbs from the contact point, and
+    // (nearly) vertical, where the leash or a rope to a backup line hangs
+    const masked = (point: [number, number], scores: number[], towards: [number, number][]) =>
+      scores.map((v, i) => {
+        const a = (i * 360) / scores.length;
+        const vertical = Math.min(Math.abs(a - 90), Math.abs(a - 270)) < 10;
+        const alongBody = towards.some(([x, y]) => {
+          const b = (Math.atan2(y - point[1], x - point[0]) * 180) / Math.PI;
+          const d = Math.abs(((a - b) % 360) + 360) % 360;
+          return Math.min(d, 360 - d) < 20;
+        });
+        return vertical || alongBody ? 0 : round(v, 2);
+      });
+    const at = (names: (typeof KEYPOINTS)[number][]) =>
+      names.map((n) => mean([n])).filter((p): p is [number, number] => !!p);
+    if (feet) contacts.push({ via: "feet", point: feet, scores: masked(feet, rayScores(gray, feet, f.scale), at(["leftKnee", "rightKnee", "leftHip", "rightHip"])) });
+    // Hands only when the body is not upright (hanging below the line, upside down)
+    if (hands && !(Math.abs(f.tilt) < 60)) contacts.push({ via: "hands", point: hands, scores: masked(hands, rayScores(gray, hands, f.scale), at(["leftElbow", "rightElbow", "leftShoulder", "rightShoulder"])) });
+    lineObs.push({ time, torso: f.scale, contacts });
   };
+
+  // Online state: the last two picked poses give speed and turn rate for the prediction
+  let last: { time: number; points: number[] } | null = null;
+  let velocity = { x: 0, y: 0, turn: 0 };
 
   try {
     await playFrames(
       video,
       (time) => {
-        sampled++;
         while (mi < motions.length - 1 && motions[mi + 1].time <= time) mi++;
         const m = motions[mi];
         const recent = last && time - last.time < 0.6 ? last : null;
-        const attempts: [PoseFrame["source"], Crop | null][] = [];
+        const crops: [PoseFrame["source"], Crop | null][] = [];
         if (recent) {
-          const c = cropFromPose(recent, W, H);
-          if (c) attempts.push(["track", c]);
+          // Predict: the body keeps moving and turning as it did
+          const dt = time - recent.time;
+          const box = cropFromPose({ time: recent.time, points: recent.points, source: "track" }, W, H);
+          if (box) {
+            const turn = Math.max(-o.turnRate, Math.min(o.turnRate, velocity.turn));
+            const predicted = squareCrop(box.cx + velocity.x * W * dt, box.cy + velocity.y * W * dt, box.size, W, H, box.angle + turn * dt);
+            crops.push(["track", predicted]);
+            // Second look: upright crop (the model knows upright people best), or a wider one
+            crops.push(["track", Math.abs(predicted.angle) > 25 ? { ...predicted, angle: 0 } : { ...predicted, size: Math.min(predicted.size * 1.5, Math.min(W, H)) }]);
+          }
+        } else {
+          if (m) {
+            const c = cropFromMotion(m.focusX, m.fgYMedian, o.grayWidth, W, H);
+            if (c) crops.push(["motion", c]);
+          }
+          crops.push(["full", null]);
         }
-        if (m) {
-          const c = cropFromMotion(m.focusX, m.fgYMedian, o.grayWidth, W, H);
-          if (c) attempts.push(["motion", c]);
-        }
-        attempts.push(["full", null]);
-
-        // The body cannot turn faster than `turnRate` between samples: such a jump is
-        // the model flipping the skeleton (head where the feet are). Then try a wider crop and the
-        // other sources, keep the result closest to the previous pose, or none.
-        const prevTilt = recent ? tiltOf(recent.points, recent.time) : NaN;
-        const maxTurn = recent ? o.turnRate * (time - recent.time) + o.turnSlack : Infinity;
-        const plausible = (points: number[]) =>
-          !Number.isFinite(prevTilt) || !(angleDiff(tiltOf(points, time), prevTilt) > maxTurn);
-        let best: { points: number[]; source: PoseFrame["source"]; diff: number } | null = null;
-        let tries = 0;
-        const candidates: [PoseFrame["source"], Crop | null][] = [...attempts];
-        if (recent) {
-          const wide = cropFromPose(recent, W, H, 2.6);
-          if (wide) candidates.splice(1, 0, ["track", wide]);
-        }
-        for (const [source, crop] of candidates) {
-          if (tries >= (Number.isFinite(prevTilt) ? 3 : 2)) break;
-          tries++;
+        // Second look only when the first does not fit the prediction (saves about half the time)
+        const fitsPrediction = (points: number[]) => {
+          if (!recent) return meanVis(points) >= 0.6;
+          const dt = time - recent.time;
+          const a = poseFeatures({ time: recent.time, points: recent.points, source: "track" });
+          const b = poseFeatures({ time, points, source: "track" });
+          const turn = Math.max(-o.turnRate, Math.min(o.turnRate, velocity.turn));
+          const expected = a.tilt + turn * dt;
+          const dTilt = Math.abs(((b.tilt - expected + 540) % 360) - 180);
+          const ca = centreOf(recent.points);
+          const cb = centreOf(points);
+          const moved = ca && cb ? Math.hypot(cb[0] - (ca[0] + velocity.x * dt), cb[1] - (ca[1] + velocity.y * dt)) : Infinity;
+          return meanVis(points) >= 0.5 && dTilt < 40 && moved < 0.5 * (a.scale || 0.1);
+        };
+        const candidates: PoseCandidate[] = [];
+        for (const [source, crop] of crops) {
           const points = run(crop);
-          if (!points) continue;
-          if (plausible(points)) {
-            best = { points, source, diff: 0 };
-            break;
-          }
-          const diff = angleDiff(tiltOf(points, time), prevTilt);
-          if (!best || diff < best.diff) best = { points, source, diff };
+          if (points) candidates.push({ points, source });
+          if (points && fitsPrediction(points)) break;
         }
-        if (best && best.diff <= maxTurn) {
-          last = { time, points: best.points, source: best.source };
-          if (o.line) {
-            const line = findLine(last);
-            if (line) last.line = line;
+        samples.push({ time, candidates });
+        if (!candidates.length) return;
+
+        // Online pick (only to steer the next crop): closest to the predicted pose
+        let pick = candidates[0];
+        if (recent) {
+          const dt = time - recent.time;
+          const dist = (pts: number[]) => {
+            let s = 0;
+            let n = 0;
+            for (let k = 0; k < KEYPOINTS.length; k++) {
+              if (pts[k * 3 + 2] < 0.3 || recent.points[k * 3 + 2] < 0.3) continue;
+              s += Math.hypot(pts[k * 3] - (recent.points[k * 3] + velocity.x * dt), pts[k * 3 + 1] - (recent.points[k * 3 + 1] + velocity.y * dt));
+              n++;
+            }
+            return n ? s / n : Infinity;
+          };
+          pick = candidates.reduce((a, b) => (dist(b.points) < dist(a.points) ? b : a));
+          const pa = poseFeatures({ time: recent.time, points: recent.points, source: "track" });
+          const pb = poseFeatures({ time, points: pick.points, source: "track" });
+          const ca = centreOf(recent.points);
+          const cb = centreOf(pick.points);
+          if (ca && cb && dt > 0) {
+            const k = 0.5; // smoothing of the velocity estimate
+            velocity.x = velocity.x * (1 - k) + ((cb[0] - ca[0]) / dt) * k;
+            velocity.y = velocity.y * (1 - k) + ((cb[1] - ca[1]) / dt) * k;
           }
-          frames.push(last);
-        } else missed.push(round(time, 3));
+          if (Number.isFinite(pa.tilt) && Number.isFinite(pb.tilt) && dt > 0) {
+            const d = ((pb.tilt - pa.tilt + 540) % 360) - 180;
+            velocity.turn = velocity.turn * 0.5 + (d / dt) * 0.5;
+          }
+        } else {
+          pick = candidates.reduce((a, b) => (meanVis(b.points) > meanVis(a.points) ? b : a));
+          velocity = { x: 0, y: 0, turn: 0 };
+        }
+        last = { time, points: pick.points };
+        if (o.line) observeLine(time, pick.points);
       },
       { fps: o.fps, adaptive: true, onProgress: o.onProgress, signal: o.signal },
     );
   } finally {
     landmarker.close();
   }
+
+  // Offline: best path through all candidates, outliers out, gaps filled, smoothed
+  const frames = trackPoses(samples);
+  const found = new Set(samples.filter((x) => x.candidates.length).map((x) => x.time));
+  const missed = samples.filter((x) => !found.has(x.time)).map((x) => round(x.time, 3));
+  if (o.line) {
+    const lines = trackLine(lineObs);
+    const byTime = new Map(lineObs.map((x, i) => [x.time, lines[i]]));
+    for (const f of frames) {
+      const l = byTime.get(f.time);
+      if (l) f.line = l;
+    }
+  }
+  const sampled = samples.length;
   return { keypoints: KEYPOINTS, videoWidth: W, videoHeight: H, frames, sampled, missed };
 
+}
+
+function meanVis(points: number[]): number {
+  let s = 0;
+  for (let k = 0; k < KEYPOINTS.length; k++) s += points[k * 3 + 2];
+  return s / KEYPOINTS.length;
+}
+
+function centreOf(points: number[]): [number, number] | null {
+  const ids = [KEYPOINTS.indexOf("leftHip"), KEYPOINTS.indexOf("rightHip"), KEYPOINTS.indexOf("leftShoulder"), KEYPOINTS.indexOf("rightShoulder")];
+  const v = ids.filter((i) => points[i * 3 + 2] >= 0.3);
+  if (!v.length) return null;
+  return [v.reduce((a, i) => a + points[i * 3], 0) / v.length, v.reduce((a, i) => a + points[i * 3 + 1], 0) / v.length];
 }
 
 function base64ToBytes(b64: string): Uint8Array {

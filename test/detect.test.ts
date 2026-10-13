@@ -27,6 +27,11 @@ function synthetic(period: number, duration: number, fps = 15, follow = 0.8, cut
       rawDiff: 5,
       fgX: 80,
       fgY: 100 + (1 - follow) * lowness(t),
+      fgYMedian: 100 + (1 - follow) * lowness(t),
+      fgYLow: 110 + (1 - follow) * lowness(t),
+      focusX: 80,
+      lineY: 110 + (1 - follow) * lowness(t),
+      lineMass: 1,
       cut: cutAt !== undefined && Math.abs(t - cutAt) < 0.5 / fps,
     });
     prevCam = cam;

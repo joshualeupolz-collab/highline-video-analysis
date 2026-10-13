@@ -31,10 +31,10 @@ for (const f of marked) {
     console.log(`${f}: no video found, skipped`);
     continue;
   }
-  const tracker = new MotionTracker();
+  const tracker = new MotionTracker(JSON.parse(process.env.MOTION_OPTS ?? "{}"));
   const motions: FrameMotion[] = [];
   let duration = 0;
-  for await (const frame of grayFrames(video, 15, 160)) {
+  for await (const frame of grayFrames(video, 15, Number(process.env.WIDTH ?? 160))) {
     duration = frame.time;
     const m = tracker.push(frame);
     if (m) motions.push(m);

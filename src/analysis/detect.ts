@@ -32,6 +32,8 @@ export interface DetectOptions {
    * plateau within this fraction of the peak's prominence below the peak (0 = the peak itself).
    */
   plateauFraction: number;
+  /** Which in-frame position of the moving foreground stands for the athlete's height. */
+  heightSource: "fgY" | "fgYMedian" | "fgYLow" | "lineY";
   /** Peaks closer than this (seconds) to a hard cut in the video are dropped. */
   edgeSeconds: number;
 }
@@ -47,6 +49,7 @@ export const defaultDetectOptions: DetectOptions = {
   minShotSeconds: 1.5,
   plateauFraction: 0.3,
   edgeSeconds: 0.4,
+  heightSource: "fgYLow",
 };
 
 interface Shot {
@@ -99,7 +102,7 @@ export function detectCutPoints(
     if (seg.length < 3 || b - a < o.minShotSeconds || last <= first) continue;
     let cum = 0;
     const raw: number[] = [];
-    const fgY = fillGaps(medianFilter(seg.map((m) => m.fgY), 5));
+    const fgY = fillGaps(medianFilter(seg.map((m) => m[o.heightSource]), 5));
     seg.forEach((m, i) => {
       if (!(m.cut && i === 0)) cum += m.dy;
       raw.push(fgY[i] - cum);

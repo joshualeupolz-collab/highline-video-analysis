@@ -12,6 +12,14 @@ export interface MotionOptions {
   /** Phase-correlation peak below this, together with a jump in raw difference, means a hard cut. */
   cutPeak: number;
   cutDiff: number;
+  /** Quantile (from the top) of the residual motion used for `fgYLow`: the lowest moving parts. */
+  lowQuantile: number;
+  /** Width of the focus band as a fraction of the frame width. */
+  focusWidth: number;
+  /** Per-frame decay of the motion heat that places the focus band. */
+  focusDecay: number;
+  /** The line is measured in bands from 1 to `lineReach` focus half-widths beside the athlete. */
+  lineReach: number;
 }
 
 export const defaultMotionOptions: MotionOptions = {
@@ -21,7 +29,23 @@ export const defaultMotionOptions: MotionOptions = {
   noiseFactor: 2.5,
   cutPeak: 0.06,
   cutDiff: 30,
+  lowQuantile: 0.85,
+  focusWidth: 0.25,
+  focusDecay: 0.93,
+  lineReach: 3,
 };
+
+/** Row (with linear interpolation) below which fraction `q` of the motion weight lies. */
+function quantileRow(rows: Float64Array, total: number, q: number): number {
+  if (!(total > 0)) return NaN;
+  const target = total * q;
+  let acc = 0;
+  for (let y = 0; y < rows.length; y++) {
+    if (acc + rows[y] >= target) return y + (rows[y] > 0 ? (target - acc) / rows[y] : 0);
+    acc += rows[y];
+  }
+  return rows.length - 1;
+}
 
 function pow2Floor(n: number): number {
   return 2 ** Math.floor(Math.log2(Math.max(1, n)));
@@ -59,6 +83,7 @@ export class MotionTracker {
   private prev: GrayFrame | null = null;
   private prevSpectrum: { re: Float64Array; im: Float64Array } | null = null;
   private readonly hist = new Uint32Array(256);
+  private heat: Float64Array | null = null;
 
   constructor(options: Partial<MotionOptions> = {}) {
     this.opts = { ...defaultMotionOptions, ...options };
@@ -130,21 +155,76 @@ export class MotionTracker {
     let sum = 0;
     let sx = 0;
     let sy = 0;
+    const cols = new Float64Array(w);
     for (let y = m; y < h - m; y++) {
       for (let x = m; x < w - m; x++) {
-        const d = diff[y * w + x] - thr;
+        const i = y * w + x;
+        const d = diff[i] - thr;
+        diff[i] = d > 0 ? d : 0;
         if (d > 0) {
           sum += d;
           sx += d * x;
           sy += d * y;
+          cols[x] += d;
         }
       }
     }
+
+    // Focus on the column band where motion keeps happening (the athlete and the line under them),
+    // so wind in trees or noise elsewhere in the frame does not drag the position around.
+    if (!this.heat || this.heat.length !== w) this.heat = new Float64Array(w);
+    const heat = this.heat;
+    const shift = Math.round(dx);
+    const moved = new Float64Array(w);
+    for (let x = 0; x < w; x++) {
+      const from = x - shift;
+      if (from >= 0 && from < w) moved[x] = heat[from];
+    }
+    for (let x = 0; x < w; x++) heat[x] = moved[x] * this.opts.focusDecay + cols[x];
+    const half = Math.max(2, Math.round(this.opts.focusWidth * w * 0.5));
+    let best = -1;
+    let bestX = w / 2;
+    let run = 0;
+    for (let x = 0; x < w; x++) {
+      run += heat[x] - (x - 2 * half - 1 >= 0 ? heat[x - 2 * half - 1] : 0);
+      if (x >= 2 * half && run > best) {
+        best = run;
+        bestX = x - half;
+      }
+    }
+    const rows = new Float64Array(h);
+    let local = 0;
+    for (let y = m; y < h - m; y++) {
+      for (let x = Math.max(m, bestX - half); x <= Math.min(w - m - 1, bestX + half); x++) {
+        rows[y] += diff[y * w + x];
+      }
+      local += rows[y];
+    }
+    // Next to the athlete only the line moves: its height there follows the line's sag and is not
+    // fooled by the body rotating around the line or hanging below it.
+    const lineRows = new Float64Array(h);
+    let lineSum = 0;
+    for (let y = m; y < h - m; y++) {
+      for (const [a, b] of [
+        [bestX - 1 - this.opts.lineReach * half, bestX - 1 - half],
+        [bestX + 1 + half, bestX + 1 + this.opts.lineReach * half],
+      ]) {
+        for (let x = Math.max(m, Math.round(a)); x <= Math.min(w - m - 1, Math.round(b)); x++) {
+          lineRows[y] += diff[y * w + x];
+        }
+      }
+      lineSum += lineRows[y];
+    }
     return {
+      lineY: quantileRow(lineRows, lineSum, 0.5),
+      lineMass: count ? lineSum / count : 0,
       residual: count ? sum / count : 0,
       rawDiff: count ? rawSum / count : 0,
       fgX: sum > 0 ? sx / sum : NaN,
       fgY: sum > 0 ? sy / sum : NaN,
+      focusX: bestX,
+      fgYMedian: quantileRow(rows, local, 0.5),
+      fgYLow: quantileRow(rows, local, this.opts.lowQuantile),
     };
   }
 }

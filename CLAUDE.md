@@ -113,6 +113,17 @@ The app stores "one video + a list of cut points" and has a cutting module witho
   bottom plateau (`plateauFraction` 0.3), not its highest sample, which was ~0.4 s late;
   points closer than 0.65 periods are merged; no points within 0.4 s of a hard cut. Only one video
   is hand-marked so far, so these defaults may still be overfitted.
+- **Second round (video-04 marked, fixed camera, tiny athlete, line clearly visible):**
+  the height now comes from `fgYLow` – the row above which 85 % of the residual motion lies,
+  measured only inside a "focus band" (25 % of the frame width) that follows where motion keeps
+  happening (column heat map with decay). That is roughly the lowest moving part of the athlete:
+  feet / line when standing. video-01 14/15, video-04 12/17 (±0.3 s); 26/32 = 81 % overall.
+  Remaining video-04 misses are where the athlete rotates around the line or lies down at the top
+  (the body is then below the line), and one camera pan (12–15 s).
+  Tried and rejected for now: 320 px analysis width (not better), `lineY` = motion in bands
+  beside the athlete, i.e. the line itself (worse: at 160 px the line is sub-pixel thin and in
+  telephoto shots hardly visible; kept as an experimental `heightSource`). Results are sensitive to
+  `lowQuantile` (0.75 and 0.9 are clearly worse), so more marked videos are needed.
 - **Owner feedback (2026-10-13):** ±0.3 s is strict; the owner also finds the exact BDC hard to
   pick when there is sideways motion. The measured point is the centroid of all residual motion
   (body + arms + line) plus camera tilt, not a specific body part; the owner would prefer the line

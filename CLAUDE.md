@@ -124,6 +124,9 @@ The app stores "one video + a list of cut points" and has a cutting module witho
   beside the athlete, i.e. the line itself (worse: at 160 px the line is sub-pixel thin and in
   telephoto shots hardly visible; kept as an experimental `heightSource`). Results are sensitive to
   `lowQuantile` (0.75 and 0.9 are clearly worse), so more marked videos are needed.
+- **Third round (video-05 marked, camera follows, no retuning):** 12/12 within ±0.3 s with the
+  `fgYLow` defaults (the old centroid `fgY` would give 10/12) – the first check on a video the
+  settings were not tuned on. Overall 38/44 = 86 %.
 - **Owner feedback (2026-10-13):** ±0.3 s is strict; the owner also finds the exact BDC hard to
   pick when there is sideways motion. The measured point is the centroid of all residual motion
   (body + arms + line) plus camera tilt, not a specific body part; the owner would prefer the line

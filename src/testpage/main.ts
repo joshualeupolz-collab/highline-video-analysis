@@ -351,8 +351,26 @@ async function runAnalysis() {
 
 // ---------- saving ----------
 
-function download(name: string, data: unknown) {
-  const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+/** Minimal shape of the claude.ai artifact runtime, present only when the page is hosted there. */
+type ArtifactRuntime = {
+  use(name: "downloads"): Promise<{ save(r: { filename: string; data: string }): Promise<unknown> } | null>;
+};
+
+async function download(name: string, data: unknown) {
+  const text = JSON.stringify(data, null, 1);
+  const runtime = (window as unknown as { claude?: ArtifactRuntime }).claude;
+  const saver = runtime ? await runtime.use("downloads").catch(() => null) : null;
+  if (saver) {
+    // Hosted as a claude.ai artifact: plain download links are blocked there.
+    try {
+      await saver.save({ filename: name, data: text });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "declined") alert(`Could not save ${name} (${code ?? err}).`);
+    }
+    return;
+  }
+  const blob = new Blob([text], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = name;
@@ -377,11 +395,11 @@ const actions: Record<string, () => void> = {
   save: () => {
     if (!current) return;
     const m = { ...current.marks, duration: video.duration, savedAt: new Date().toISOString() };
-    download(`${baseName(current.file.name)}.bdc.json`, m);
+    void download(`${baseName(current.file.name)}.bdc.json`, m);
   },
   "save-auto": () => {
     if (!current?.auto) return alert("Run the analysis first.");
-    download(`${baseName(current.file.name)}.auto.json`, current.auto);
+    void download(`${baseName(current.file.name)}.auto.json`, current.auto);
   },
   adopt: () => {
     if (!current?.auto) return alert("Run the analysis first.");

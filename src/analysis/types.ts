@@ -23,6 +23,16 @@ export interface FrameMotion {
   /** Weighted centroid of the residual motion in gray-frame pixels (NaN if no motion). */
   fgX: number;
   fgY: number;
+  /** Weighted median row of the motion beside the athlete (the line), NaN if none. */
+  lineY: number;
+  /** Amount of motion beside the athlete (how much line is visible). */
+  lineMass: number;
+  /** Centre column of the band where motion keeps happening (the athlete). */
+  focusX: number;
+  /** Weighted median row of the residual motion inside the focus band. */
+  fgYMedian: number;
+  /** Row above which most (`lowQuantile`) of the focus band's motion lies: the lowest moving parts. */
+  fgYLow: number;
   /** True if this frame starts a new shot (hard cut in the video). */
   cut: boolean;
 }

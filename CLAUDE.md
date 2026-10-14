@@ -217,6 +217,26 @@ The app stores "one video + a list of cut points" and has a cutting module witho
     sizes), then the full frame.
   - Offline tracker allows 900°/s turning (tuck flips are that fast). The tuck flip in video-08 at
     16.2–18 s (motion blur, body folded) is still partly wrong – close to what MediaPipe can do.
+- **Round 5 (owner feedback 2026-10-14: skeleton sometimes one frame off; line stays at the feet
+  when the hands take over; wanted: stick figure without the video):**
+  - Checked with a frame-numbered test video (each frame encodes its index): with rVFC playback
+    the frame drawn can be newer than the reported `mediaTime` – at 4× ~15 % of samples were two
+    frames late, at 8× more; at 2× and in the pose pass at ≤ 1× (pause while working) every
+    sample matched. So the motion pass now defaults to 2× and the pose pass never plays faster
+    than 1× between samples.
+  - Display: the skeleton is drawn for the frame the browser actually presents (rVFC on the visible
+    video), not for the seek target; frame stepping lands in the middle of a frame; `poseAt` uses
+    the sample of exactly that frame or interpolates between the neighbours. Checked: 8 steps at
+    13.0 s in video-08, pose time = shown frame every time.
+  - Offline tracker: impossible turns cost much more (`turnWeight` 6, excess / 45°), so a run of
+    flipped skeletons (video-08 13.0–13.4 s, hanging upright with arms up) is dropped and filled
+    from both sides instead of being kept.
+  - Line: hands are a contact candidate also when both wrists are above the head (hanging from
+    the line / reaching for it), so the line can move from the feet to the hands.
+  - Test page: "Show video" / ◐ / key V hides the picture and leaves the stick figure (and line).
+  - Note on the bone-length metric: many "bad bone" poses in video-05 are correct, the limbs are
+    just foreshortened (body turned towards the camera); real errors there are few (e.g. 8.2 s,
+    25.6 s).
 - **Privacy (decide before the app uses it):** MediaPipe Tasks sends usage statistics (task type,
   timings; no images) to `https://odml.pa.googleapis.com/v1/log` and has no switch to turn that off.
 - Model files: `.task` from `./mediapipe/`, else the same model as base64 JSON

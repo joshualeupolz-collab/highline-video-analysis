@@ -41,6 +41,7 @@
             <option value="0.5">0.5×</option>
             <option value="1" selected>1×</option>
           </select>
+          <button data-act="toggle-video" title="V: video on/off (stick figure only)">◐</button>
           <button data-act="fullscreen" title="F">⛶</button>
         </div>
         <p id="poseInfo" class="mono"></p>
@@ -82,9 +83,10 @@
         <button data-act="analyze" class="primary">Run automatic analysis</button>
         <label>speed
           <select id="analysisRate">
-            <option value="2">2× (slow phones)</option>
-            <option value="4" selected>4×</option>
-            <option value="8">8×</option>
+            <option value="1">1× (slowest)</option>
+            <option value="2" selected>2× (exact frames)</option>
+            <option value="4">4× (faster, some frames off by 2)</option>
+            <option value="8">8× (rough)</option>
           </select>
         </label>
         <label class="check"><input id="usePose" type="checkbox" checked /> Body pose</label>
@@ -97,6 +99,7 @@
           <option value="10" selected>10 poses/s (+ every frame in fast moves)</option>
           <option value="15">15 poses/s (+ every frame in fast moves)</option>
         </select>
+        <label class="check"><input id="showVideo" type="checkbox" checked /> Show video</label>
         <label class="check"><input id="skeleton" type="checkbox" checked /> Show skeleton</label>
         <label class="check"><input id="showLine" type="checkbox" /> Show line (experimental)</label>
         <label class="check"><input id="blind" type="checkbox" /> Hide automatic points (mark blind)</label>
@@ -126,6 +129,7 @@
       <ul>
         <li>The dashed yellow line is the tensioned line as the analysis sees it (experimental: it is only drawn
           where it was found clearly, and it can still lock onto an arm or a branch).</li>
+        <li><b>V</b> or ◐ hides the video and shows only the stick figure (and the line).</li>
         <li><b>F</b> or ⛶ switches to full screen; the skeleton, the buttons and all keys keep working there.</li>
         <li>Step through the video and press <b>M</b> (or the green button) at every bottom dead center (lowest point
           of a bounce). <b>C</b> marks a cut in the video (a change of shot).</li>

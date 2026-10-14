@@ -1,4 +1,5 @@
 import { analyze } from "../analysis/analyze";
+import { loadVideo, playFrames } from "../analysis/videoFrames";
 import { evaluateCutPoints } from "../analysis/evaluate";
 import { legExtension, legReference, poseFeatures } from "../analysis/pose/features";
 import { bounceProfiles } from "../analysis/pose/profile";
@@ -33,7 +34,10 @@ interface Entry {
   auto: AnalysisResult | null;
 }
 
-const FRAME = 1 / 30;
+/** Frame duration of the current video (30 fps unless the pose samples show otherwise). */
+let FRAME = 1 / 30;
+/** Media time of the frame the browser actually shows (from requestVideoFrameCallback), or null. */
+let shownTime: number | null = null;
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const video = $<HTMLVideoElement>("video");
 const list = $<HTMLSelectElement>("videoList");
@@ -160,6 +164,7 @@ function renderList() {
 
 function select(e: Entry) {
   analyzing?.abort();
+  shownTime = null;
   $("textBox").hidden = true;
   current = e;
   video.src = e.url;
@@ -224,6 +229,13 @@ function seek(t: number) {
   refresh();
 }
 
+/** Steps exactly `n` frames from the frame on screen, landing in the middle of the target frame. */
+function stepFrames(n: number) {
+  const now = shownTime ?? time();
+  const index = Math.round(now / FRAME) + n;
+  seek((index + 0.5) * FRAME);
+}
+
 const showAuto = () => !blind.checked;
 
 // ---------- drawing ----------
@@ -268,7 +280,8 @@ function renderPose(view: TimelineView) {
   const pose = current?.auto?.pose;
   poseChart.hidden = !pose;
   $("poseLegend").hidden = !pose;
-  const frame = pose ? poseAt(pose.track, time()) : null;
+  // The skeleton belongs to the frame on screen, not to the (possibly newer) seek target
+  const frame = pose ? poseAt(pose.track, shownTime ?? time(), FRAME) : null;
   drawSkeleton(overlay, video, frame, {
     skeleton: ($("skeleton") as HTMLInputElement).checked,
     line: ($("showLine") as HTMLInputElement).checked,
@@ -475,6 +488,11 @@ async function runAnalysis() {
         (statusEl.textContent = `${phase === "motion" ? "motion" : "body pose"}… ${Math.round(f * 100)} %`),
     });
     const pose = entry.auto.pose;
+    if (pose) {
+      const steps = pose.track.frames.slice(1).map((f, i) => f.time - pose.track.frames[i].time).filter((d) => d > 0.005);
+      const min = Math.min(...steps);
+      if (min > 0.01 && min < 0.06) FRAME = min;
+    }
     statusEl.textContent =
       `done in ${((performance.now() - started) / 1000).toFixed(1)} s` +
       (pose
@@ -547,9 +565,9 @@ async function download(name: string, data: unknown) {
 
 const actions: Record<string, () => void> = {
   "back-big": () => seek(time() - 0.5),
-  back: () => seek(time() - FRAME),
+  back: () => stepFrames(-1),
   play: () => (video.paused ? video.play() : video.pause()),
-  fwd: () => seek(time() + FRAME),
+  fwd: () => stepFrames(1),
   "fwd-big": () => seek(time() + 0.5),
   mark: () => addMark("bdc"),
   cut: () => addMark("cuts"),
@@ -558,6 +576,11 @@ const actions: Record<string, () => void> = {
   next: () => jump(1),
   analyze: runAnalysis,
   fullscreen: toggleFullscreen,
+  "toggle-video": () => {
+    const box = $<HTMLInputElement>("showVideo");
+    box.checked = !box.checked;
+    box.dispatchEvent(new Event("change"));
+  },
   save: () => {
     if (!current) return;
     const m = { ...current.marks, duration: video.duration, savedAt: new Date().toISOString() };
@@ -624,6 +647,8 @@ document.addEventListener("keydown", (ev) => {
     p: "prev",
     P: "prev",
     f: "fullscreen",
+    v: "toggle-video",
+    V: "toggle-video",
     F: "fullscreen",
     Escape: "exit-fullscreen",
   };
@@ -672,13 +697,36 @@ video.addEventListener("play", refresh);
 video.addEventListener("pause", refresh);
 ($("skeleton") as HTMLInputElement).addEventListener("change", refresh);
 ($("showLine") as HTMLInputElement).addEventListener("change", refresh);
+// "Only the stick figure": hide the picture but keep the element (its frames still drive the overlay)
+$<HTMLInputElement>("showVideo").addEventListener("change", (ev) => {
+  video.style.opacity = (ev.target as HTMLInputElement).checked ? "1" : "0";
+});
 attachTimeline(overview, 0);
 attachTimeline(detail, 1);
 new ResizeObserver(refresh).observe(overview);
 new ResizeObserver(refresh).observe(video);
 
 // Hook for automated tests (scripts/browser-eval.mjs).
-(window as unknown as { bdcBench: unknown }).bdcBench = { analyze };
+(window as unknown as { bdcBench: unknown }).bdcBench = {
+  analyze,
+  playFrames,
+  loadVideo,
+  state: () => ({ shownTime, currentTime: video.currentTime, frame: FRAME }),
+};
+
+// Redraw when the browser actually presents a new frame (after a seek or while playing)
+{
+  type Rvfc = (cb: (now: number, meta: { mediaTime: number }) => void) => number;
+  const rvfc = (video as unknown as { requestVideoFrameCallback?: Rvfc }).requestVideoFrameCallback?.bind(video);
+  if (rvfc) {
+    const onShown = (_now: number, meta: { mediaTime: number }) => {
+      shownTime = meta.mediaTime;
+      refresh();
+      rvfc(onShown);
+    };
+    rvfc(onShown);
+  }
+}
 
 (function tick() {
   if (current && !video.paused) refresh();

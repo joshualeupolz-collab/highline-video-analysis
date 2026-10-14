@@ -18,7 +18,9 @@ export interface FrameSourceOptions {
 export const defaultFrameSourceOptions: FrameSourceOptions = {
   width: 160,
   fps: 15,
-  playbackRate: 4,
+  // 2×: every sample is the frame its timestamp says (checked with a frame-numbered test video);
+  // at 4× about 15 % of the samples were two frames newer, at 8× more.
+  playbackRate: 2,
 };
 
 type VideoWithRvfc = HTMLVideoElement & {
@@ -156,15 +158,17 @@ export async function playFrames(
       }
       if (meta.mediaTime - last >= step * 0.9) {
         last = meta.mediaTime;
+        const time = meta.mediaTime;
         if (o.pauseWhileWorking) video.pause();
         const started = performance.now();
-        onFrame(meta.mediaTime);
+        onFrame(time);
         const work = (performance.now() - started) / 1000;
-        o.onProgress?.(meta.mediaTime / duration);
+        o.onProgress?.(time / duration);
         step = o.nextStep?.() ?? step;
         if (o.pauseWhileWorking) {
-          // 30 fps video: speed 1 presents every frame; larger steps may run faster
-          const want = Math.max(0.5, Math.min(2, step * 30));
+          // Never faster than 1×: above that the browser skips frames and the frame on screen can be
+          // newer than the one this callback reports (checked with a frame-numbered test video)
+          const want = Math.max(0.5, Math.min(1, step * 30));
           if (Math.abs(want - video.playbackRate) > 0.05) video.playbackRate = want;
           if (video.currentTime < duration) video.play().catch(() => undefined);
         } else if (o.adaptive) {

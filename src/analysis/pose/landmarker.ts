@@ -210,8 +210,13 @@ export async function trackPose(
     const at = (names: (typeof KEYPOINTS)[number][]) =>
       names.map((n) => mean([n])).filter((p): p is [number, number] => !!p);
     if (feet) contacts.push({ via: "feet", point: feet, scores: masked(feet, rayScores(gray, feet, f.scale), at(["leftKnee", "rightKnee", "leftHip", "rightHip"])) });
-    // Hands only when the body is not upright (hanging below the line, upside down)
-    if (hands && !(Math.abs(f.tilt) < 60)) contacts.push({ via: "hands", point: hands, scores: masked(hands, rayScores(gray, hands, f.scale), at(["leftElbow", "rightElbow", "leftShoulder", "rightShoulder"])) });
+    // Hands only when they can hold the line: body not upright (hanging, upside down), or both
+    // hands above the head (hanging from the line or reaching for it)
+    const nose = mean(["nose"]);
+    const lw = mean(["leftWrist"]);
+    const rw = mean(["rightWrist"]);
+    const handsUp = !!(nose && lw && rw && lw[1] < nose[1] && rw[1] < nose[1]);
+    if (hands && (!(Math.abs(f.tilt) < 60) || handsUp)) contacts.push({ via: "hands", point: hands, scores: masked(hands, rayScores(gray, hands, f.scale), at(["leftElbow", "rightElbow", "leftShoulder", "rightShoulder"])) });
     lineObs.push({ time, torso: f.scale, contacts });
   };
 

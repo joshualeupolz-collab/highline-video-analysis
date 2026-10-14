@@ -50,7 +50,7 @@ export const defaultTrackOptions: TrackOptions = {
   freeTurn: 900,
   noneCost: 3,
   jumpWeight: 2,
-  turnWeight: 2,
+  turnWeight: 6,
   boneWeight: 1.5,
   outlier: 0.6,
   maxGap: 0.6,
@@ -194,7 +194,9 @@ export function trackPoses(samples: PoseSample[], options: Partial<TrackOptions>
     }
     let cost = o.jumpWeight * (n ? sum / n : 1);
     if (Number.isFinite(a.body.angle) && Number.isFinite(b.body.angle)) {
-      const turn = Math.max(0, angleDiff(a.body.angle, b.body.angle) - o.freeTurn * dt) / 90;
+      // Turning faster than a person can is (almost) never right: a run of flipped skeletons must
+      // cost more than leaving those samples empty and filling them in from both sides
+      const turn = Math.max(0, angleDiff(a.body.angle, b.body.angle) - o.freeTurn * dt) / 45;
       cost += o.turnWeight * turn * turn;
     }
     return cost;

@@ -1,4 +1,5 @@
 import { MIN_VISIBILITY } from "../analysis/pose/features";
+import { interpolatePose } from "../analysis/pose/track";
 import { KEYPOINTS, type PoseFrame, type PoseTrack } from "../analysis/pose/types";
 
 const i = Object.fromEntries(KEYPOINTS.map((k, n) => [k, n])) as Record<(typeof KEYPOINTS)[number], number>;
@@ -25,11 +26,28 @@ const BONES: [number, number, 0 | 1 | 2][] = [
   [i.rightAnkle, i.rightToe, 2],
 ];
 
-/** The pose sample nearest to `t`, if within `maxGap` seconds. */
-export function poseAt(track: PoseTrack, t: number, maxGap = 0.2): PoseFrame | null {
-  let best: PoseFrame | null = null;
-  for (const f of track.frames) if (!best || Math.abs(f.time - t) < Math.abs(best.time - t)) best = f;
-  return best && Math.abs(best.time - t) <= maxGap ? best : null;
+/**
+ * The pose for the video frame at time `t`: the sample of exactly that frame if there is one,
+ * else interpolated between the samples before and after (each at most `maxGap` seconds away).
+ */
+export function poseAt(track: PoseTrack, t: number, frameDuration = 1 / 30, maxGap = 0.25): PoseFrame | null {
+  const frames = track.frames;
+  let lo = 0;
+  let hi = frames.length - 1;
+  if (hi < 0) return null;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (frames[mid].time < t) lo = mid + 1;
+    else hi = mid;
+  }
+  const after = frames[lo];
+  const before = lo > 0 ? frames[lo - 1] : null;
+  for (const f of [after, before]) if (f && Math.abs(f.time - t) < frameDuration / 2) return f;
+  if (before && after && after.time > t && t - before.time <= maxGap && after.time - t <= maxGap) {
+    const f = (t - before.time) / (after.time - before.time);
+    return { time: t, points: interpolatePose(before.points, after.points, f), source: "interpolated" };
+  }
+  return null;
 }
 
 /** Draws `pose` over the displayed video picture (object-fit: contain). */

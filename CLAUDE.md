@@ -237,6 +237,22 @@ The app stores "one video + a list of cut points" and has a cutting module witho
   - Note on the bone-length metric: many "bad bone" poses in video-05 are correct, the limbs are
     just foreshortened (body turned towards the camera); real errors there are few (e.g. 8.2 s,
     25.6 s).
+- **Round 6 – line detection rebuilt (2026-11-16, owner: line still "wild"):** `trackLine` in
+  `line.ts` now uses the whole video first. The anchors are fixed, so each half of the line points
+  in about the same direction all the time: (1) vote over all upright samples for the two main
+  directions (≥ 120° apart; the direction whose ±30° window holds a clear ray most often),
+  (2) feet or hands as contact per sample (2-state Viterbi, posture prior), (3) per half a Viterbi
+  over the deviation from its main direction (≤ 30°, slow change – the V gets steeper at the
+  bottom). `LineEstimate.seen` says per half whether it was seen in that frame (drawn bright) or
+  carried over (faint). Rays: 180 directions, from 0.5 torso lengths, 0.35 frame widths long,
+  ridge widths 1.5/3/6 px; only the athlete's own limbs are masked (the earlier mask for
+  near-vertical directions hid real lines filmed from the anchor).
+  Checked by eye on 16 frames each: video-01 both halves on the line in most standing frames and
+  when hanging by the hands; video-08 the visible half right throughout, the nearly invisible half
+  plausible; video-05 the left webbing in about half the frames, wrong lines (brick joints) while
+  the athlete hangs on the rope. Tried first and dropped: fixed anchor *points* in camera-
+  stabilised coordinates – fine for the far half, but the camera path drifts too much (video-01)
+  for the near half. Not solved: frames in the air (no contact) still get a line at the feet.
 - **Privacy (decide before the app uses it):** MediaPipe Tasks sends usage statistics (task type,
   timings; no images) to `https://odml.pa.googleapis.com/v1/log` and has no switch to turn that off.
 - Model files: `.task` from `./mediapipe/`, else the same model as base64 JSON

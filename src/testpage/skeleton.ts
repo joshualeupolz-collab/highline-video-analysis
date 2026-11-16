@@ -105,19 +105,22 @@ export function drawSkeleton(
     const W = video.videoWidth * k;
     const c = [ox + l.contact[0] * W, oy + l.contact[1] * W];
     ctx.setLineDash([8, 5]);
-    for (const a of l.angles) {
+    l.angles.forEach((a, h) => {
       const ux = Math.cos((a * Math.PI) / 180);
       const uy = Math.sin((a * Math.PI) / 180);
+      // A half not seen in this frame is the tracked guess: drawn faint
+      ctx.globalAlpha = l.seen && !l.seen[h] ? 0.3 : 1;
       ctx.strokeStyle = "rgba(0,0,0,0.5)";
       ctx.lineWidth = 5;
       ctx.beginPath();
-      ctx.moveTo(c[0] + ux * l.start * W * 0.3, c[1] + uy * l.start * W * 0.3);
+      ctx.moveTo(c[0], c[1]);
       ctx.lineTo(c[0] + ux * (l.start + l.reach) * W, c[1] + uy * (l.start + l.reach) * W);
       ctx.stroke();
       ctx.strokeStyle = "#facc15";
       ctx.lineWidth = 2.5;
       ctx.stroke();
-    }
+    });
+    ctx.globalAlpha = 1;
     ctx.setLineDash([]);
   }
   ctx.globalAlpha = 1;

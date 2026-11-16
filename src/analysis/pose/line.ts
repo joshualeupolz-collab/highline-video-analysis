@@ -25,6 +25,8 @@ export interface LineEstimate {
   /** Ray score against the median ray (higher = clearer line). */
   score: number;
   via: "feet" | "hands";
+  /** Whether each half was actually seen in this frame (else it is the tracked guess). */
+  seen?: [boolean, boolean];
 }
 
 export interface LineOptions {
@@ -44,8 +46,8 @@ export interface LineOptions {
 export const defaultLineOptions: LineOptions = {
   step: 3,
   minOpening: 130,
-  reach: 0.3,
-  startTorso: 0.6,
+  reach: 0.35,
+  startTorso: 0.5,
   widths: [1.5, 3, 6],
   minScore: 6,
 };
@@ -99,7 +101,7 @@ export function rayScores(
   img: GrayImage,
   point: [number, number],
   torso: number,
-  directions = 90,
+  directions = 180,
   options: Partial<LineOptions> = {},
 ): number[] {
   const o = { ...defaultLineOptions, ...options };
@@ -175,166 +177,211 @@ export function detectLine(
 export interface LineObservation {
   time: number;
   torso: number;
+  /** Torso tilt in degrees (0 = upright), to tell standing from hanging. */
+  tilt: number;
   contacts: { via: LineEstimate["via"]; point: [number, number]; scores: number[] }[];
 }
 
 export interface LineTrackOptions {
-  /** Orientation steps of the state grid (degrees; must be a multiple of 360 / scores.length). */
-  orientationStep: number;
-  /** Kink steps (degrees, the two halves deviate by kink / 2 each from a straight line). */
-  kinkStep: number;
-  maxKink: number;
-  /** Typical change per second of the line direction and of the kink (degrees). */
+  /** The two halves' main directions must differ by at least this angle (degrees). */
+  minOpening: number;
+  /** A half may deviate from its main direction by up to this angle (degrees) in a frame. */
+  maxDeviation: number;
+  /** Deviation (degrees) that costs as much as one unit of score. */
+  deviationScale: number;
+  /** Typical change of a half's direction per second (degrees). */
   turnPerSecond: number;
-  kinkPerSecond: number;
   /** Cost of switching between feet and hands as the contact. */
   switchCost: number;
-  /** Cost when the two halves bend downwards from the contact (Λ instead of V). */
-  wrongBendCost: number;
-  /** Below this mean score (vs. the median ray) the line counts as not seen. */
+  /** Cost for feet as contact when not upright, and for hands when upright. */
+  postureCost: number;
+  /** A half counts as seen in a frame from this score (vs. the median ray) on. */
   minScore: number;
 }
 
 export const defaultLineTrackOptions: LineTrackOptions = {
-  orientationStep: 4,
-  kinkStep: 8,
-  maxKink: 64,
-  turnPerSecond: 90,
-  kinkPerSecond: 120,
-  switchCost: 4,
-  wrongBendCost: 1.5,
-  minScore: 3,
+  minOpening: 120,
+  maxDeviation: 30,
+  deviationScale: 40,
+  turnPerSecond: 120,
+  switchCost: 6,
+  postureCost: 4,
+  minScore: 2,
 };
 
+/** Scores divided by their median, capped, and widened by one direction step. */
+function normalised(scores: number[], cap = 10): number[] {
+  const positive = scores.filter((v) => v > 0).sort((p, q) => p - q);
+  const base = (positive.length ? positive[positive.length >> 1] : 1) + 1e-3;
+  const n = scores.map((v) => Math.min(v / base, cap));
+  return n.map((v, i) => Math.max(v, n[(i + 1) % n.length], n[(i + n.length - 1) % n.length]));
+}
+
 /**
- * Follows the line through all samples (Viterbi): its direction and kink change slowly, the contact
- * stays on the feet (or the hands) unless the evidence clearly says otherwise, and the halves
- * usually rise from the contact point in a V. Returns one estimate (or null when unseen) per sample.
+ * Follows the line through the whole video.
+ *
+ * 1. Main directions: the anchors do not move, so over the video each half of the line points in
+ *    about the same direction. The two best directions (at least `minOpening` apart) of the mean
+ *    ray score over all upright samples are the halves' main directions. A branch or an arm that
+ *    looks like a line in a few frames cannot win this vote.
+ * 2. Contact: feet or hands per sample, whichever sees the halves better (2-state Viterbi with a
+ *    switching cost and a posture prior).
+ * 3. Per half a Viterbi over the deviation from its main direction (the V gets steeper at the
+ *    bottom of a bounce): high ray score, small deviation, slow change.
+ *
+ * Returns one estimate per observation, or null where there is no contact point.
  */
 export function trackLine(obs: LineObservation[], options: Partial<LineTrackOptions> = {}): (LineEstimate | null)[] {
   const o = { ...defaultLineTrackOptions, ...options };
-  if (!obs.length) return [];
-  const dirs = obs.find((x) => x.contacts.length)?.contacts[0].scores.length ?? 90;
-  const degPerDir = 360 / dirs;
-  const nO = Math.round(180 / o.orientationStep);
-  const nK = Math.round((2 * o.maxKink) / o.kinkStep) + 1;
+  const first = obs.find((x) => x.contacts.length);
+  if (!first) return obs.map(() => null);
+  const dirs = first.contacts[0].scores.length;
+  const step = 360 / dirs;
   const vias: LineEstimate["via"][] = ["feet", "hands"];
-  const nS = 2 * nO * nK;
-  const state = (v: number, oi: number, ki: number) => (v * nO + oi) * nK + ki;
-  const anglesOf = (oi: number, ki: number): [number, number] => {
-    const orient = oi * o.orientationStep;
-    const kink = -o.maxKink + ki * o.kinkStep;
-    return [orient + kink / 2, orient + 180 - kink / 2];
-  };
-  const wrongBend = new Float64Array(nO * nK);
-  for (let oi = 0; oi < nO; oi++)
-    for (let ki = 0; ki < nK; ki++) {
-      const [a, b] = anglesOf(oi, ki).map((x) => (x * Math.PI) / 180);
-      // Bisector of the two halves: pointing down (y > 0) means both halves fall away from the contact
-      const by = Math.sin(a) + Math.sin(b);
-      wrongBend[oi * nK + ki] = by > 0.2 ? o.wrongBendCost : 0;
-    }
+  const norm = obs.map((x) => vias.map((v) => {
+    const c = x.contacts.find((k) => k.via === v);
+    return c ? normalised(c.scores) : null;
+  }));
 
-  const scoreAt = (scores: number[], deg: number) => {
-    const i = Math.round((((deg % 360) + 360) % 360) / degPerDir) % dirs;
-    return scores[i];
+  // 1. Main directions from upright samples' feet: the direction whose ±maxDeviation window
+  // holds a clear line in the most samples
+  const R = Math.round(o.maxDeviation / step);
+  const windowMax = (n: number[], d: number) => {
+    let best = 0;
+    for (let k = -R; k <= R; k++) best = Math.max(best, n[(d + k + dirs) % dirs]);
+    return best;
   };
-
-  // Observation cost per state: minus the mean normalised score of the two halves (capped)
-  const obsCost = (x: LineObservation, out: Float64Array, norm: Float64Array) => {
-    out.fill(5);
-    norm.fill(0);
-    for (const c of x.contacts) {
-      const v = vias.indexOf(c.via);
-      const sorted = [...c.scores].sort((p, q) => p - q);
-      const base = sorted[sorted.length >> 1] + 1e-3;
-      for (let oi = 0; oi < nO; oi++)
-        for (let ki = 0; ki < nK; ki++) {
-          const [a, b] = anglesOf(oi, ki);
-          const score = (scoreAt(c.scores, a) + scoreAt(c.scores, b)) / (2 * base);
-          const s = state(v, oi, ki);
-          norm[s] = score;
-          out[s] = -Math.min(score, 12) / 3 + wrongBend[oi * nK + ki];
-        }
-    }
+  const votes = new Array<number>(dirs).fill(0);
+  const vote = (n: number[]) => {
+    for (let i = 0; i < dirs; i++) votes[i] += Math.min(windowMax(n, i), 6);
   };
-
-  let cost = new Float64Array(nS);
-  let next = new Float64Array(nS);
-  const back: Int32Array[] = [];
-  const norms: Float64Array[] = [];
-  const oc = new Float64Array(nS);
-  let lastTime = obs[0].time;
-  const wO = 3;
-  const wK = 2;
+  let count = 0;
   obs.forEach((x, t) => {
-    const norm = new Float64Array(nS);
-    obsCost(x, oc, norm);
-    norms.push(norm);
-    const bk = new Int32Array(nS);
-    if (t === 0) {
-      cost.set(oc);
-      back.push(bk);
-      lastTime = x.time;
-      return;
+    const n = norm[t][0];
+    if (!n || !(Math.abs(x.tilt) < 70)) return;
+    vote(n);
+    count++;
+  });
+  if (!count) {
+    // Never upright on the feet: use whatever contact there is
+    for (const pair of norm) {
+      const n = pair[0] ?? pair[1];
+      if (n) vote(n);
     }
-    const dt = Math.max(1 / 60, x.time - lastTime);
-    lastTime = x.time;
-    const sO = Math.max(o.orientationStep, o.turnPerSecond * dt);
-    const sK = Math.max(o.kinkStep, o.kinkPerSecond * dt);
-    for (let v = 0; v < 2; v++)
-      for (let oi = 0; oi < nO; oi++)
-        for (let ki = 0; ki < nK; ki++) {
-          let best = Infinity;
-          let arg = 0;
-          for (let pv = 0; pv < 2; pv++)
-            for (let d = -wO; d <= wO; d++) {
-              const raw = oi + d;
-              const wrapped = raw < 0 || raw >= nO;
-              const po = (raw + nO) % nO;
-              const dO = (d * o.orientationStep) / sO;
-              for (let e = -wK; e <= wK; e++) {
-                const k2 = ki + e;
-                if (k2 < 0 || k2 >= nK) continue;
-                // Orientation wraps at 180°: then the same line has the mirrored kink index
-                const pk = wrapped ? nK - 1 - k2 : k2;
-                const dK = (e * o.kinkStep) / sK;
-                const c = cost[state(pv, po, pk)] + dO * dO + dK * dK + (pv !== v ? o.switchCost : 0);
-                if (c < best) {
-                  best = c;
-                  arg = state(pv, po, pk);
-                }
-              }
-            }
-          const s = state(v, oi, ki);
-          next[s] = best + oc[s];
-          bk[s] = arg;
+  }
+  const apart = (i: number, j: number) => {
+    const d = Math.abs(i - j) % dirs;
+    return Math.min(d, dirs - d) * step;
+  };
+  /** Best direction among the allowed ones; on a plateau of equally good ones, its middle. */
+  const pick = (allowed: (i: number) => boolean) => {
+    let best = -1;
+    for (let i = 0; i < dirs; i++) if (allowed(i) && (best < 0 || votes[i] > votes[best])) best = i;
+    if (best < 0) return 0;
+    const level = votes[best] * 0.98;
+    let lo = 0;
+    let hi = 0;
+    while (lo > -dirs / 4 && allowed((best + lo - 1 + dirs) % dirs) && votes[(best + lo - 1 + dirs) % dirs] >= level) lo--;
+    while (hi < dirs / 4 && allowed((best + hi + 1) % dirs) && votes[(best + hi + 1) % dirs] >= level) hi++;
+    return (best + Math.round((lo + hi) / 2) + dirs) % dirs;
+  };
+  const d1 = pick(() => true);
+  const d2 = pick((i) => apart(i, d1) >= o.minOpening);
+  const main = [d1, d2];
+
+  // 2. Contact per sample
+  const gain = obs.map((x, t) =>
+    vias.map((v, c) => {
+      const n = norm[t][c];
+      if (!n) return -50;
+      const upright = Math.abs(x.tilt) < 60;
+      const wrongPosture = (v === "hands") === upright;
+      return Math.min(windowMax(n, d1), 6) + Math.min(windowMax(n, d2), 6) - (wrongPosture ? o.postureCost : 0);
+    }),
+  );
+  const choice = new Array<number>(obs.length).fill(0);
+  {
+    let cost = [0, 0];
+    const back: number[][] = [];
+    for (let t = 0; t < obs.length; t++) {
+      const next = [0, 0];
+      const arg = [0, 0];
+      for (let c = 0; c < 2; c++) {
+        const stay = cost[c];
+        const move = cost[1 - c] + o.switchCost;
+        arg[c] = stay <= move ? c : 1 - c;
+        next[c] = Math.min(stay, move) - gain[t][c];
+      }
+      cost = next;
+      back.push(arg);
+    }
+    let c = cost[0] <= cost[1] ? 0 : 1;
+    for (let t = obs.length - 1; t >= 0; t--) {
+      choice[t] = c;
+      c = back[t][c];
+    }
+  }
+
+  // 3. Deviation from the main direction per half
+  const K = 2 * R + 1;
+  const paths = main.map((d) => {
+    let cost = new Float64Array(K);
+    const back: Int16Array[] = [];
+    for (let t = 0; t < obs.length; t++) {
+      const n = norm[t][choice[t]];
+      const oc = new Float64Array(K);
+      for (let k = 0; k < K; k++) {
+        const off = (k - R) * step;
+        oc[k] = -(n ? Math.min(n[(d + k - R + dirs) % dirs], 8) : 0) / 2 + (off / o.deviationScale) ** 2;
+      }
+      const bk = new Int16Array(K);
+      if (t === 0) {
+        cost = oc;
+        back.push(bk);
+        continue;
+      }
+      const dt = Math.max(1 / 60, obs[t].time - obs[t - 1].time);
+      const s = Math.max(2 * step, o.turnPerSecond * dt);
+      const next = new Float64Array(K);
+      for (let k = 0; k < K; k++) {
+        let best = Infinity;
+        let arg = 0;
+        for (let j = 0; j < K; j++) {
+          const c = cost[j] + (((k - j) * step) / s) ** 2;
+          if (c < best) {
+            best = c;
+            arg = j;
+          }
         }
-    [cost, next] = [next, cost];
-    back.push(bk);
+        next[k] = best + oc[k];
+        bk[k] = arg;
+      }
+      cost = next;
+      back.push(bk);
+    }
+    let k = 0;
+    for (let j = 1; j < K; j++) if (cost[j] < cost[k]) k = j;
+    const path = new Array<number>(obs.length).fill(0);
+    for (let t = obs.length - 1; t >= 0; t--) {
+      path[t] = (d + k - R + dirs) % dirs;
+      k = back[t][k];
+    }
+    return path;
   });
 
-  let s = 0;
-  for (let i = 1; i < nS; i++) if (cost[i] < cost[s]) s = i;
-  const out: (LineEstimate | null)[] = new Array(obs.length).fill(null);
-  for (let t = obs.length - 1; t >= 0; t--) {
-    const v = Math.floor(s / (nO * nK));
-    const oi = Math.floor((s % (nO * nK)) / nK);
-    const ki = s % nK;
-    const c = obs[t].contacts.find((x) => x.via === vias[v]);
-    const score = norms[t][s];
-    if (c && score >= o.minScore) {
-      const [a, b] = anglesOf(oi, ki);
-      out[t] = {
-        contact: c.point,
-        angles: [((a % 360) + 360) % 360, ((b % 360) + 360) % 360],
-        start: defaultLineOptions.startTorso * obs[t].torso,
-        reach: defaultLineOptions.reach,
-        score,
-        via: vias[v],
-      };
-    }
-    s = back[t][s];
-  }
-  return out;
+  return obs.map((x, t) => {
+    const n = norm[t][choice[t]];
+    const c = x.contacts.find((k) => k.via === vias[choice[t]]);
+    if (!n || !c) return null;
+    const s = [n[paths[0][t]], n[paths[1][t]]];
+    return {
+      contact: c.point,
+      angles: [paths[0][t] * step, paths[1][t] * step],
+      start: defaultLineOptions.startTorso * x.torso,
+      reach: defaultLineOptions.reach,
+      score: (s[0] + s[1]) / 2,
+      via: vias[choice[t]],
+      seen: [s[0] >= o.minScore, s[1] >= o.minScore],
+    };
+  });
 }

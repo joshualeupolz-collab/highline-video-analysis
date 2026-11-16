@@ -39,26 +39,52 @@ describe("detectLine", () => {
 });
 
 describe("trackLine", () => {
+  // 180 directions (2° steps); background level 1 with a little texture, line peaks at 20
   const scores = (peaks: number[]) => {
-    const s = new Array(90).fill(1);
-    for (const p of peaks) s[Math.round(p / 4) % 90] = 20;
+    const s = Array.from({ length: 180 }, (_, i) => 1 + (i % 3) * 0.1);
+    for (const p of peaks) s[Math.round(p / 2) % 180] = 20;
     return s;
   };
+  const sample = (i: number, feet: number[], hands: number[], tilt = 0) => ({
+    time: i / 15,
+    torso: 0.1,
+    tilt,
+    contacts: [
+      { via: "feet" as const, point: [0.5, 0.6] as [number, number], scores: scores(feet) },
+      { via: "hands" as const, point: [0.5, 0.3] as [number, number], scores: scores(hands) },
+    ],
+  });
 
-  it("keeps a steady line and ignores a one-frame jump to the hands", () => {
-    const obs = Array.from({ length: 20 }, (_, i) => ({
-      time: i / 15,
-      torso: 0.1,
-      contacts: [
-        { via: "feet" as const, point: [0.5, 0.6] as [number, number], scores: i === 10 ? scores([]) : scores([340, 200]) },
-        { via: "hands" as const, point: [0.5, 0.3] as [number, number], scores: i === 10 ? scores([0, 180]) : scores([]) },
-      ],
-    }));
+  it("keeps a steady line and ignores a one-frame distraction", () => {
+    // Frame 10: nothing at the feet, a "line" (an arm, a branch) elsewhere at the hands
+    const obs = Array.from({ length: 20 }, (_, i) => (i === 10 ? sample(i, [], [90, 270]) : sample(i, [340, 200], [])));
     const lines = trackLine(obs);
     expect(lines[5]?.via).toBe("feet");
-    expect([...lines[5]!.angles].sort((a, b) => a - b)).toEqual([200, 340]);
-    // Frame 10: no line seen at the feet; the track does not jump to the hands
-    expect(lines[10] === null || lines[10].via === "feet").toBe(true);
-    expect(lines[15]?.via).toBe("feet");
+    const near = (angles: number[], want: number[]) =>
+      [...angles].sort((a, b) => a - b).every((a, i) => Math.abs(a - want[i]) <= 2);
+    expect(near(lines[5]!.angles, [200, 340])).toBe(true);
+    expect(lines[5]!.seen).toEqual([true, true]);
+    expect(lines[10]?.via).toBe("feet");
+    expect(lines[10]!.seen).toEqual([false, false]);
+    expect(near(lines[10]!.angles, [200, 340])).toBe(true);
+  });
+
+  it("follows a half whose angle changes slowly (deeper V at the bottom)", () => {
+    const obs = Array.from({ length: 30 }, (_, i) => sample(i, [180, 340 + Math.round(10 * Math.sin(i / 5)) * 2], []));
+    const lines = trackLine(obs);
+    lines.forEach((l, i) => {
+      const want = (340 + Math.round(10 * Math.sin(i / 5)) * 2) % 360;
+      expect(l!.angles.some((a) => Math.min(Math.abs(a - want), 360 - Math.abs(a - want)) <= 6)).toBe(true);
+    });
+  });
+
+  it("moves the contact to the hands while hanging", () => {
+    const obs = Array.from({ length: 40 }, (_, i) =>
+      i >= 15 && i < 30 ? sample(i, [], [340, 200], 170) : sample(i, [340, 200], []),
+    );
+    const lines = trackLine(obs);
+    expect(lines[5]?.via).toBe("feet");
+    expect(lines[22]?.via).toBe("hands");
+    expect(lines[36]?.via).toBe("feet");
   });
 });

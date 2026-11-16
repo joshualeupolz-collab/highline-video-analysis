@@ -194,30 +194,22 @@ export async function trackPose(
     const contacts: LineObservation["contacts"] = [];
     const feet = mean(["leftAnkle", "rightAnkle", "leftHeel", "rightHeel", "leftToe", "rightToe"]);
     const hands = mean(["leftWrist", "rightWrist"]);
-    // Directions that cannot be the line: along the athlete's own limbs from the contact point, and
-    // (nearly) vertical, where the leash or a rope to a backup line hangs
+    // Directions along the athlete's own limbs from the contact point cannot be the line
     const masked = (point: [number, number], scores: number[], towards: [number, number][]) =>
       scores.map((v, i) => {
         const a = (i * 360) / scores.length;
-        const vertical = Math.min(Math.abs(a - 90), Math.abs(a - 270)) < 10;
         const alongBody = towards.some(([x, y]) => {
           const b = (Math.atan2(y - point[1], x - point[0]) * 180) / Math.PI;
           const d = Math.abs(((a - b) % 360) + 360) % 360;
-          return Math.min(d, 360 - d) < 20;
+          return Math.min(d, 360 - d) < 18;
         });
-        return vertical || alongBody ? 0 : round(v, 2);
+        return alongBody ? 0 : round(v, 2);
       });
     const at = (names: (typeof KEYPOINTS)[number][]) =>
       names.map((n) => mean([n])).filter((p): p is [number, number] => !!p);
     if (feet) contacts.push({ via: "feet", point: feet, scores: masked(feet, rayScores(gray, feet, f.scale), at(["leftKnee", "rightKnee", "leftHip", "rightHip"])) });
-    // Hands only when they can hold the line: body not upright (hanging, upside down), or both
-    // hands above the head (hanging from the line or reaching for it)
-    const nose = mean(["nose"]);
-    const lw = mean(["leftWrist"]);
-    const rw = mean(["rightWrist"]);
-    const handsUp = !!(nose && lw && rw && lw[1] < nose[1] && rw[1] < nose[1]);
-    if (hands && (!(Math.abs(f.tilt) < 60) || handsUp)) contacts.push({ via: "hands", point: hands, scores: masked(hands, rayScores(gray, hands, f.scale), at(["leftElbow", "rightElbow", "leftShoulder", "rightShoulder"])) });
-    lineObs.push({ time, torso: f.scale, contacts });
+    if (hands) contacts.push({ via: "hands", point: hands, scores: masked(hands, rayScores(gray, hands, f.scale), at(["leftElbow", "rightElbow", "leftShoulder", "rightShoulder"])) });
+    lineObs.push({ time, torso: f.scale, tilt: f.tilt, contacts });
   };
 
   // Online state: the last two picked poses give speed and turn rate for the prediction
